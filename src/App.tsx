@@ -1,35 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import {
-  FileText,
-  BarChart3,
-  Building2,
-  Calendar,
-  AlertTriangle,
-  CheckCircle2,
-  Clock,
-  Sparkles,
-  RefreshCw,
-  Copy,
-  Check,
-  Send,
-  Phone,
-  ArrowRight,
-  ArrowLeft,
-  Upload,
-  Info,
-  ShieldAlert,
-  Star,
-  Layers,
-  ChevronRight,
-  Filter,
-  Trash2,
-  Download,
-  Mail,
-  ExternalLink,
-  Search,
-  Key,
-  X
-} from 'lucide-react';
+import { ChartCard, BarChart, DonutChart, ThemeProvider } from 'ztd-charts';
 import {
   Assessment,
   CleanTransaction,
@@ -174,7 +144,6 @@ export default function App() {
     setFileName(file.name);
 
     if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
-      // Binary Excel Reader
       const reader = new FileReader();
       reader.onload = (event) => {
         const buffer = event.target?.result as ArrayBuffer;
@@ -198,7 +167,6 @@ export default function App() {
       };
       reader.readAsArrayBuffer(file);
     } else {
-      // CSV Reader
       const reader = new FileReader();
       reader.onload = (event) => {
         const text = event.target?.result as string;
@@ -225,7 +193,6 @@ export default function App() {
     }
   }
 
-  // Execute Analysis button in Data Registration screen
   function handleExecuteAnalysis() {
     if (!mapping.customer || !mapping.date) return;
     try {
@@ -238,7 +205,6 @@ export default function App() {
     }
   }
 
-  // Assessments computed from cleanRows, flags, refDate
   const assessments = useMemo(() => {
     return analyze(cleanRows, flags, refDate);
   }, [cleanRows, flags, refDate]);
@@ -251,7 +217,6 @@ export default function App() {
     return prioritize(assessments);
   }, [assessments]);
 
-  // Filtered and searched assessments for Dashboard
   const displayedAssessments = useMemo(() => {
     let list = assessments;
 
@@ -290,12 +255,10 @@ export default function App() {
     return getFollowups(refDate, customerNameMap);
   }, [refDate, customerNameMap]);
 
-  // Selected assessment object for Screen 3
   const currentAssessment = useMemo(() => {
     return assessments.find(a => a.customer_key === selectedKey) || assessments[0] || null;
   }, [assessments, selectedKey]);
 
-  // Load existing drafts and touchpoints when selected customer changes
   useEffect(() => {
     if (!currentAssessment) return;
     const emDraft = latestDraft(currentAssessment.customer_key, 'email');
@@ -315,7 +278,6 @@ export default function App() {
     setTouchSuccessMsg(null);
   }, [currentAssessment, contactName]);
 
-  // Recency check banner
   const recencyWarning = useMemo(() => {
     if (!assessments.length) return null;
     const allDates = assessments.map(a => a.last_date).filter(Boolean);
@@ -330,7 +292,76 @@ export default function App() {
     return null;
   }, [assessments, refDate]);
 
-  // Handlers for LLM Generation
+  // ztd-charts data for Customer Detail (Screen 3)
+  const customerIntervalChartData = useMemo(() => {
+    if (!currentAssessment) return [];
+    const rawIntervals = currentAssessment.intervals || [];
+    const recent = rawIntervals.slice(-6); // last up to 6 intervals
+    const data: { label: string; days: number }[] = [];
+
+    recent.forEach((val, idx) => {
+      const nth = recent.length - idx;
+      data.push({
+        label: `${nth}회 전`,
+        days: val,
+      });
+    });
+
+    data.push({
+      label: '최근 공백',
+      days: currentAssessment.gap_days,
+    });
+
+    return data;
+  }, [currentAssessment]);
+
+  const customerChartAnnotations = useMemo(() => {
+    if (!currentAssessment?.median_interval) return [];
+    return [
+      {
+        type: 'line' as const,
+        y: Math.round(currentAssessment.median_interval),
+        label: `평소 기준 ${Math.round(currentAssessment.median_interval)}일`,
+      },
+    ];
+  }, [currentAssessment]);
+
+  // ztd-charts data for Dashboard (Screen 2)
+  const dashboardGapChartData = useMemo(() => {
+    const targetAssessments = priorityList
+      .filter((a: Assessment) => a.status === 'high_risk' || a.status === 'risk' || a.status === 'attention')
+      .slice(0, 6);
+
+    return targetAssessments.map((a: Assessment) => ({
+      name: a.display_name,
+      gap_days: a.gap_days,
+    }));
+  }, [priorityList]);
+
+  const dashboardGapHighlight = useMemo(() => {
+    if (dashboardGapChartData.length > 0) {
+      return dashboardGapChartData[0].name;
+    }
+    return undefined;
+  }, [dashboardGapChartData]);
+
+  const dashboardStatusChartData = useMemo(() => {
+    return [
+      { label: '고위험 후보', value: summary.high_risk },
+      { label: '이탈 위험 후보', value: summary.risk },
+      { label: '관심 필요', value: summary.attention },
+      { label: '정상 관리', value: summary.normal },
+      { label: '판단 보류', value: summary.hold },
+    ].filter(d => d.value > 0);
+  }, [summary]);
+
+  const dashboardStatusHighlight = useMemo(() => {
+    if (summary.high_risk > 0) return '고위험 후보';
+    if (summary.risk > 0) return '이탈 위험 후보';
+    if (summary.attention > 0) return '관심 필요';
+    return '정상 관리';
+  }, [summary]);
+
   async function handleGenerateBriefing(forceLive: boolean = false) {
     setIsBriefingLoading(true);
     try {
@@ -386,7 +417,6 @@ export default function App() {
     setTimeout(() => setCopiedType(null), 2500);
   }
 
-  // Mailto and Gmail Web opener
   function handleOpenMailApp() {
     if (!emailSubject && !emailBody) return;
     const mailtoUrl = `mailto:?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
@@ -399,7 +429,6 @@ export default function App() {
     window.open(gmailUrl, '_blank', 'noopener,noreferrer');
   }
 
-  // Export CSV functions
   function handleExportAnalysisCSV() {
     let csv = '거래처명,식별자,상태,VIP여부,프로젝트성,최근거래일,공백일수,평소주기(일),주기대비배수,신뢰도,총거래일수,평균금액(원)\n';
     for (const a of assessments) {
@@ -469,20 +498,23 @@ export default function App() {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-800 font-sans">
+    <ThemeProvider theme="light" locale="ko-KR">
+      <div className="flex min-h-screen bg-slate-50 text-slate-800">
       {/* ------------------------------------------------------------- */}
       {/* SIDEBAR                                                       */}
       {/* ------------------------------------------------------------- */}
       <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
-        {/* Header / Logo */}
+        {/* Header / Flat Vector Brand Emblem */}
         <div className="p-5 border-b border-slate-100">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-xs">
-              <svg width="24" height="24" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            {/* Flat Vector Factory & Anomaly Emblem */}
+            <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-xs shrink-0">
+              <svg width="28" height="28" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <rect width="48" height="48" rx="10" fill="#2563EB" />
                 <path d="M14 34V20L24 14L34 20V34H14Z" fill="#93C5FD" />
                 <path d="M20 34V26H28V34H20Z" fill="#1D4ED8" />
                 <circle cx="34" cy="14" r="5" fill="#F59E0B" />
+                <path d="M34 11V17M31 14H37" stroke="#FFFFFF" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
             </div>
             <div>
@@ -494,13 +526,13 @@ export default function App() {
 
         {/* Sidebar Controls */}
         <div className="p-5 flex-1 space-y-6 overflow-y-auto">
-          {/* LLM Status Badge & API Key Config */}
+          {/* LLM Status Badge */}
           <div className="space-y-2">
             {apiKey.trim() ? (
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-emerald-800 text-xs font-bold">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="material-symbols-outlined text-emerald-600" style={{ fontSize: '18px' }}>check_circle</span>
                     <span>Liner/Gemini API 연결됨</span>
                   </div>
                   <button
@@ -521,7 +553,7 @@ export default function App() {
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-amber-800 text-xs font-bold">
-                    <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span className="material-symbols-outlined text-amber-600" style={{ fontSize: '18px' }}>info</span>
                     <span>기본 템플릿 (폴백 모드)</span>
                   </div>
                   <button
@@ -543,8 +575,9 @@ export default function App() {
 
           {/* Reference Date Picker */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              분석 기준일
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>calendar_today</span>
+              <span>분석 기준일</span>
             </label>
             <div className="relative">
               <input
@@ -566,7 +599,10 @@ export default function App() {
           {/* Demo Mode Toggle */}
           <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
             <div>
-              <div className="text-xs font-bold text-slate-800">데모 모드</div>
+              <div className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>cached</span>
+                데모 모드
+              </div>
               <div className="text-[11px] text-slate-500">응답 캐시 우선 활용</div>
             </div>
             <button
@@ -598,7 +634,7 @@ export default function App() {
                     : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                 }`}
               >
-                <BarChart3 className="w-3.5 h-3.5" />
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>monitoring</span>
                 대시보드
               </button>
               <button
@@ -609,7 +645,7 @@ export default function App() {
                     : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                 }`}
               >
-                <Layers className="w-3.5 h-3.5" />
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>upload_file</span>
                 데이터 등록
               </button>
             </div>
@@ -630,13 +666,13 @@ export default function App() {
             <button
               onClick={handleResetDemo}
               disabled={!resetConfirmed}
-              className={`w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-colors ${
+              className={`w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-colors ${
                 resetConfirmed
                   ? 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
                   : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
               }`}
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>restart_alt</span>
               데모 리셋 (126행)
             </button>
           </div>
@@ -657,16 +693,33 @@ export default function App() {
         {/* ========================================================= */}
         {page === 'data' && (
           <div className="max-w-6xl mx-auto space-y-6">
-            {/* Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+            {/* Header with Flat Vector Banner */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-6">
               <div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
-                  <FileText className="w-7 h-7 text-blue-600" />
-                  거래 데이터 등록 및 품질 검사
+                <div className="flex items-center gap-2 text-blue-600 font-bold text-xs uppercase tracking-wider mb-1">
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>folder_open</span>
+                  <span>거래 원장 수집 & 품질 필터링</span>
+                </div>
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+                  거래 데이터 등록 및 5종 품질 검사
                 </h2>
-                <p className="text-sm text-slate-500 mt-1">
-                  CSV 또는 엑셀(XLSX/XLS) 거래 원장을 업로드하고 데이터 정합성과 품질 5종을 확인합니다.
+                <p className="text-sm text-slate-500 mt-1 max-w-xl">
+                  CSV 또는 엑셀(XLSX/XLS) 거래 원장을 업로드하면 컬럼 자동 인식 및 중복·취소·오류 데이터 무결성 검증을 즉시 실행합니다.
                 </p>
+              </div>
+
+              {/* Flat Vector Illustration: Data Processing & Blueprint */}
+              <div className="hidden md:block shrink-0">
+                <svg width="140" height="90" viewBox="0 0 140 90" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <rect x="15" y="10" width="110" height="70" rx="8" fill="#F1F5F9" stroke="#CBD5E1" strokeWidth="2" strokeDasharray="4 4" />
+                  <rect x="25" y="20" width="75" height="50" rx="6" fill="#FFFFFF" stroke="#94A3B8" strokeWidth="1.5" />
+                  <rect x="32" y="28" width="60" height="6" rx="2" fill="#E2E8F0" />
+                  <rect x="32" y="38" width="40" height="4" rx="2" fill="#E2E8F0" />
+                  <rect x="32" y="46" width="50" height="4" rx="2" fill="#E2E8F0" />
+                  <rect x="32" y="54" width="30" height="4" rx="2" fill="#E2E8F0" />
+                  <circle cx="95" cy="55" r="16" fill="#2563EB" />
+                  <path d="M90 55L94 59L101 51" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </div>
             </div>
 
@@ -674,12 +727,12 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-sm mb-1 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-amber-500" />
+                  <h3 className="font-bold text-slate-900 text-sm mb-1 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-amber-500" style={{ fontSize: '20px' }}>auto_awesome</span>
                     데모 원클릭 불러오기
                   </h3>
-                  <p className="text-xs text-slate-500 mb-4">
-                    12개 가상 거래처의 126행 거래 내역(중복, 음수, 날짜 오류 포함)을 즉시 로드합니다.
+                  <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                    12개 가상 거래처의 126행 거래 내역(정상 123행, 중복 1건, 음수 1건, 날짜오류 1건)을 한 번에 준비합니다.
                   </p>
                 </div>
                 <button
@@ -689,21 +742,21 @@ export default function App() {
                   }}
                   className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-xs"
                 >
-                  <Upload className="w-4 h-4" />
-                  데모 파일 불러오기 (126행)
+                  <span className="material-symbols-outlined text-sm">download</span>
+                  <span>데모 파일 불러오기 (126행)</span>
                 </button>
               </div>
 
               <div className="md:col-span-2 bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-                <h3 className="font-bold text-slate-900 text-sm mb-1 flex items-center gap-2">
-                  <Upload className="w-4 h-4 text-blue-600" />
-                  새 파일 업로드 (CSV 또는 XLSX / XLS 지원)
+                <h3 className="font-bold text-slate-900 text-sm mb-1 flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '20px' }}>cloud_upload</span>
+                  새 원장 업로드 (CSV 또는 XLSX / XLS 지원)
                 </h3>
                 <p className="text-xs text-slate-500 mb-3">
                   제조 거래 원장 엑셀 파일(`.xlsx`, `.xls`) 또는 `.csv` 파일을 드래그하여 바로 분석할 수 있습니다.
                 </p>
-                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-lg p-5 flex flex-col items-center justify-center cursor-pointer bg-slate-50 hover:bg-blue-50/40 transition-colors">
-                  <Upload className="w-6 h-6 text-slate-400 mb-1" />
+                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer bg-slate-50 hover:bg-blue-50/40 transition-colors">
+                  <span className="material-symbols-outlined text-slate-400 mb-1" style={{ fontSize: '28px' }}>upload_file</span>
                   <span className="text-xs font-bold text-slate-700">파일 선택 (CSV 또는 XLSX 엑셀)</span>
                   <span className="text-[11px] text-slate-400 mt-0.5">최대 5,000행 자동 파싱 지원</span>
                   <input
@@ -721,7 +774,8 @@ export default function App() {
               <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-6">
                 <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                   <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
-                    <span className="bg-blue-50 text-blue-800 border border-blue-200 px-2.5 py-1 rounded-md font-mono font-bold">
+                    <span className="bg-blue-50 text-blue-800 border border-blue-200 px-2.5 py-1 rounded-md font-mono font-bold flex items-center gap-1">
+                      <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '16px' }}>description</span>
                       {fileName}
                     </span>
                     <span>총 행 수: <strong className="text-slate-900">{rawRows.length.toLocaleString()}행</strong></span>
@@ -731,8 +785,9 @@ export default function App() {
 
                 {/* Top 5 rows preview */}
                 <div>
-                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5">
-                    🔍 원본 데이터 상위 5행 미리보기
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>table_view</span>
+                    원본 데이터 상위 5행 미리보기
                   </h4>
                   <div className="overflow-x-auto border border-slate-200 rounded-lg">
                     <table className="w-full text-left text-xs text-slate-700">
@@ -758,7 +813,8 @@ export default function App() {
 
                 {/* Column Mapping Section */}
                 <div>
-                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 flex items-center gap-1">
+                    <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>tune</span>
                     컬럼 자동 인식 및 매핑 확인
                   </h4>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -831,31 +887,32 @@ export default function App() {
                 {/* Quality Result Cards */}
                 {quality && (
                   <div className="space-y-4 pt-3 border-t border-slate-100">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                      <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>verified</span>
                       품질 검사 결과 (5종 검증)
                     </h4>
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+                      <div className="metric-box" style={{ borderTop: '4px solid #10B981' }}>
                         <div className="text-xs font-bold text-emerald-800">정상 거래</div>
                         <div className="text-2xl font-black text-emerald-600 my-1">{quality.counts.ok}</div>
                         <div className="text-[11px] text-emerald-700">분석 반영 행</div>
                       </div>
-                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+                      <div className="metric-box" style={{ borderTop: '4px solid #F59E0B' }}>
                         <div className="text-xs font-bold text-amber-800">완전 중복</div>
                         <div className="text-2xl font-black text-amber-600 my-1">{quality.counts.duplicate}</div>
                         <div className="text-[11px] text-amber-700">첫 행만 유지</div>
                       </div>
-                      <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-center">
+                      <div className="metric-box" style={{ borderTop: '4px solid #EF4444' }}>
                         <div className="text-xs font-bold text-rose-800">취소 후보 (음수)</div>
                         <div className="text-2xl font-black text-rose-600 my-1">{quality.counts.negative}</div>
                         <div className="text-[11px] text-rose-700">분석 제외</div>
                       </div>
-                      <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-center">
+                      <div className="metric-box" style={{ borderTop: '4px solid #6366F1' }}>
                         <div className="text-xs font-bold text-indigo-800">날짜 변환 오류</div>
                         <div className="text-2xl font-black text-indigo-600 my-1">{quality.counts.invalid}</div>
                         <div className="text-[11px] text-indigo-700">분석 제외</div>
                       </div>
-                      <div className="bg-slate-100 border border-slate-200 rounded-xl p-4 text-center">
+                      <div className="metric-box" style={{ borderTop: '4px solid #64748B' }}>
                         <div className="text-xs font-bold text-slate-700">미래 날짜</div>
                         <div className="text-2xl font-black text-slate-600 my-1">{quality.counts.future}</div>
                         <div className="text-[11px] text-slate-500">분석 제외</div>
@@ -866,7 +923,7 @@ export default function App() {
                     {quality.issues.length > 0 && (
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
                         <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1.5">
-                          <AlertTriangle className="w-4 h-4 text-amber-500" />
+                          <span className="material-symbols-outlined text-amber-500" style={{ fontSize: '18px' }}>warning</span>
                           분석에서 제외된 행 목록 ({quality.issues.length}건)
                         </div>
                         <div className="overflow-x-auto">
@@ -899,7 +956,7 @@ export default function App() {
                       <div className="space-y-2">
                         {quality.similar_pairs.map(([p1, p2], idx) => (
                           <div key={idx} className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 flex items-center gap-2">
-                            <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                            <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '18px' }}>info</span>
                             <span>
                               유사 거래처명 감지: <strong>'{p1}'</strong> ↔ <strong>'{p2}'</strong> (원장 표기 차이일 수 있으나 원본 무결성을 위해 개별 분석을 진행합니다)
                             </span>
@@ -917,8 +974,9 @@ export default function App() {
                     disabled={!mapping.customer || !mapping.date}
                     className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-extrabold text-sm py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-xs"
                   >
-                    <span>🚀 분석 실행 및 대시보드로 이동</span>
-                    <ArrowRight className="w-4 h-4" />
+                    <span className="material-symbols-outlined text-base">rocket_launch</span>
+                    <span>분석 실행 및 대시보드로 이동</span>
+                    <span className="material-symbols-outlined text-base">arrow_forward</span>
                   </button>
                 </div>
               </div>
@@ -934,7 +992,7 @@ export default function App() {
             {/* Recency warning */}
             {recencyWarning && (
               <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-center gap-3 text-amber-900 text-xs">
-                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                <span className="material-symbols-outlined text-amber-600 shrink-0" style={{ fontSize: '20px' }}>warning</span>
                 <div>
                   <strong>데이터가 오래되었습니다:</strong> 파일 내 최신 거래일(
                   <span className="font-mono">{recencyWarning.maxDate}</span>)과 분석 기준일(
@@ -943,15 +1001,18 @@ export default function App() {
               </div>
             )}
 
-            {/* Top Dashboard Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-3">
+            {/* Top Dashboard Header with Flat Vector Graphic */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
-                  <BarChart3 className="w-7 h-7 text-blue-600" />
-                  거래처 주문 주기 & 이탈 위험 대시보드
+                <div className="flex items-center gap-2 text-blue-600 font-bold text-xs uppercase tracking-wider mb-1">
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>monitoring</span>
+                  <span>거래 간격 이상 감지 대시보드</span>
+                </div>
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+                  거래처 주문 주기 & 이탈 위험 현황
                 </h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  분석 기준일: <strong className="text-slate-800">{refDate}</strong> · 총 관리 거래처: <strong className="text-slate-800">{assessments.length}곳</strong>
+                  분석 기준일: <strong className="text-slate-800 font-mono">{refDate}</strong> · 총 관리 거래처: <strong className="text-slate-800">{assessments.length}곳</strong>
                 </p>
               </div>
 
@@ -960,14 +1021,14 @@ export default function App() {
                   onClick={handleExportAnalysisCSV}
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 px-3 py-2 rounded-lg transition-colors border border-slate-200 shadow-xs"
                 >
-                  <Download className="w-3.5 h-3.5 text-blue-600" />
+                  <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '18px' }}>download</span>
                   분석 결과 CSV 다운로드
                 </button>
                 <button
                   onClick={() => setPage('data')}
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-2 rounded-lg transition-colors border border-blue-200"
                 >
-                  <Layers className="w-3.5 h-3.5" />
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>layers</span>
                   데이터 다시 올리기
                 </button>
               </div>
@@ -977,9 +1038,10 @@ export default function App() {
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               <div
                 onClick={() => setStatusFilter(statusFilter === 'normal' ? 'all' : 'normal')}
-                className={`cursor-pointer bg-white border rounded-xl p-4 shadow-xs text-center border-t-4 border-t-emerald-500 transition-all ${
-                  statusFilter === 'normal' ? 'ring-2 ring-emerald-500 border-emerald-500' : 'border-slate-200 hover:border-slate-300'
+                className={`metric-box cursor-pointer transition-all ${
+                  statusFilter === 'normal' ? 'ring-2 ring-emerald-500 border-emerald-500' : 'hover:border-slate-300'
                 }`}
+                style={{ borderTop: '4px solid #10B981' }}
               >
                 <div className="text-xs font-bold text-slate-500">정상 관리</div>
                 <div className="text-3xl font-black text-emerald-600 my-1">{summary.normal}</div>
@@ -988,9 +1050,10 @@ export default function App() {
 
               <div
                 onClick={() => setStatusFilter(statusFilter === 'risk_only' ? 'all' : 'risk_only')}
-                className={`cursor-pointer bg-white border rounded-xl p-4 shadow-xs text-center border-t-4 border-t-amber-500 transition-all ${
-                  statusFilter === 'risk_only' ? 'ring-2 ring-amber-500 border-amber-500' : 'border-slate-200 hover:border-slate-300'
+                className={`metric-box cursor-pointer transition-all ${
+                  statusFilter === 'risk_only' ? 'ring-2 ring-amber-500 border-amber-500' : 'hover:border-slate-300'
                 }`}
+                style={{ borderTop: '4px solid #F59E0B' }}
               >
                 <div className="text-xs font-bold text-slate-500">관심 필요</div>
                 <div className="text-3xl font-black text-amber-600 my-1">{summary.attention}</div>
@@ -999,9 +1062,10 @@ export default function App() {
 
               <div
                 onClick={() => setStatusFilter(statusFilter === 'risk_only' ? 'all' : 'risk_only')}
-                className={`cursor-pointer bg-white border rounded-xl p-4 shadow-xs text-center border-t-4 border-t-rose-500 transition-all ${
-                  statusFilter === 'risk_only' ? 'ring-2 ring-rose-500 border-rose-500' : 'border-slate-200 hover:border-slate-300'
+                className={`metric-box cursor-pointer transition-all ${
+                  statusFilter === 'risk_only' ? 'ring-2 ring-rose-500 border-rose-500' : 'hover:border-slate-300'
                 }`}
+                style={{ borderTop: '4px solid #DC2626' }}
               >
                 <div className="text-xs font-bold text-slate-500">이탈 위험 후보</div>
                 <div className="text-3xl font-black text-rose-600 my-1">{summary.risk}</div>
@@ -1010,9 +1074,10 @@ export default function App() {
 
               <div
                 onClick={() => setStatusFilter(statusFilter === 'risk_only' ? 'all' : 'risk_only')}
-                className={`cursor-pointer bg-white border rounded-xl p-4 shadow-xs text-center border-t-4 border-t-purple-600 transition-all ${
-                  statusFilter === 'risk_only' ? 'ring-2 ring-purple-600 border-purple-600' : 'border-slate-200 hover:border-slate-300'
+                className={`metric-box cursor-pointer transition-all ${
+                  statusFilter === 'risk_only' ? 'ring-2 ring-purple-600 border-purple-600' : 'hover:border-slate-300'
                 }`}
+                style={{ borderTop: '4px solid #7C3AED' }}
               >
                 <div className="text-xs font-bold text-slate-500">고위험 후보</div>
                 <div className="text-3xl font-black text-purple-600 my-1">{summary.high_risk}</div>
@@ -1021,9 +1086,10 @@ export default function App() {
 
               <div
                 onClick={() => setStatusFilter(statusFilter === 'hold' ? 'all' : 'hold')}
-                className={`cursor-pointer bg-white border rounded-xl p-4 shadow-xs text-center border-t-4 border-t-slate-400 transition-all ${
-                  statusFilter === 'hold' ? 'ring-2 ring-slate-500 border-slate-500' : 'border-slate-200 hover:border-slate-300'
+                className={`metric-box cursor-pointer transition-all ${
+                  statusFilter === 'hold' ? 'ring-2 ring-slate-500 border-slate-500' : 'hover:border-slate-300'
                 }`}
+                style={{ borderTop: '4px solid #64748B' }}
               >
                 <div className="text-xs font-bold text-slate-500">판단 보류</div>
                 <div className="text-3xl font-black text-slate-600 my-1">{summary.hold}</div>
@@ -1031,12 +1097,77 @@ export default function App() {
               </div>
             </div>
 
+            {/* Visual Analytics Overview with ztd-charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+              <div className="lg:col-span-7">
+                <ChartCard
+                  number="01"
+                  title="주요 거래처 주문 공백 비교"
+                  subtitle="우선 확인 및 이탈 위험 거래처의 최근 공백(일) 현황"
+                  takeaway={
+                    dashboardGapChartData.length > 0
+                      ? `${dashboardGapChartData[0].name}의 최근 공백이 ${dashboardGapChartData[0].gap_days}일로 가장 긴 지연 상태입니다.`
+                      : '모든 거래처가 안정적인 주기 내에 있습니다.'
+                  }
+                  accent="공백"
+                  level="basic"
+                  replay
+                >
+                  {dashboardGapChartData.length > 0 ? (
+                    <BarChart
+                      data={dashboardGapChartData}
+                      x="name"
+                      y="gap_days"
+                      highlight={dashboardGapHighlight}
+                      unit="일"
+                      locale="ko-KR"
+                      height={210}
+                      annotations={[
+                        {
+                          type: 'line',
+                          y: 30,
+                          label: '통상 주기 기준 (30일)',
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <div className="h-52 flex items-center justify-center text-xs text-slate-400">
+                      표시할 이상 감지 거래처가 없습니다.
+                    </div>
+                  )}
+                </ChartCard>
+              </div>
+
+              <div className="lg:col-span-5">
+                <ChartCard
+                  number="02"
+                  title="거래처 관리 상태 분포"
+                  subtitle="주문 주기 이상 감지 기준 위험도 분류"
+                  takeaway={`총 ${assessments.length}곳 중 이탈 위험 및 고위험 ${summary.risk + summary.high_risk}곳 집중 조치 필요`}
+                  accent="분포"
+                  level="basic"
+                  replay
+                >
+                  <DonutChart
+                    data={dashboardStatusChartData}
+                    label="label"
+                    value="value"
+                    highlight={dashboardStatusHighlight}
+                    centerLabel="총 거래처"
+                    unit="곳"
+                    locale="ko-KR"
+                    height={210}
+                  />
+                </ChartCard>
+              </div>
+            </div>
+
             {/* Weekly Briefing Card */}
             <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-blue-100 text-blue-700">
-                    <FileText className="w-4 h-4" />
+                  <div className="p-1.5 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
+                    <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>article</span>
                   </div>
                   <h3 className="font-extrabold text-slate-900 text-base">이번 주 브리핑</h3>
                 </div>
@@ -1047,7 +1178,7 @@ export default function App() {
                     disabled={isBriefingLoading}
                     className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-3.5 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
                   >
-                    <Sparkles className="w-3.5 h-3.5" />
+                    <span className="material-symbols-outlined text-sm">auto_awesome</span>
                     <span>{isBriefingLoading ? '작성 중...' : '이번 주 브리핑 생성'}</span>
                   </button>
                   <button
@@ -1055,7 +1186,7 @@ export default function App() {
                     disabled={isBriefingLoading}
                     className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span className="material-symbols-outlined text-sm">sync</span>
                     <span>새로 생성 (Live)</span>
                   </button>
                 </div>
@@ -1066,7 +1197,8 @@ export default function App() {
                 <div className="border-l-4 border-blue-600 pl-4 py-1 space-y-3">
                   <div className="flex items-center justify-between">
                     <h4 className="font-bold text-slate-900 text-sm">{briefing.content.headline}</h4>
-                    <span className="text-[11px] font-semibold bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md border border-blue-200">
+                    <span className="source-tag">
+                      <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '16px' }}>bolt</span>
                       {briefing.source === 'live'
                         ? `Liner/Gemini API 응답 (${briefing.latency_ms || 500}ms)`
                         : briefing.source === 'cache'
@@ -1105,7 +1237,7 @@ export default function App() {
 
                   {briefing.content.caution && (
                     <div className="text-[11px] text-slate-400 pt-2 border-t border-dashed border-slate-200 flex items-center gap-1.5">
-                      <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <span className="material-symbols-outlined text-slate-400 shrink-0" style={{ fontSize: '16px' }}>info</span>
                       <span>{briefing.content.caution}</span>
                     </div>
                   )}
@@ -1122,20 +1254,20 @@ export default function App() {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 {/* Search input */}
                 <div className="relative flex-1 max-w-sm">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <span className="material-symbols-outlined text-slate-400 absolute left-3 top-2" style={{ fontSize: '18px' }}>search</span>
                   <input
                     type="text"
                     placeholder="거래처명 또는 식별자(C01...) 검색"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                   {searchQuery && (
                     <button
                       onClick={() => setSearchQuery('')}
                       className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
                     >
-                      <X className="w-3.5 h-3.5" />
+                      <span className="material-symbols-outlined text-sm">close</span>
                     </button>
                   )}
                 </div>
@@ -1143,7 +1275,7 @@ export default function App() {
                 {/* Filter pills */}
                 <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="text-slate-400 mr-1 text-[11px] flex items-center gap-1">
-                    <Filter className="w-3 h-3" /> 필터:
+                    <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>filter_alt</span> 필터:
                   </span>
                   <button
                     onClick={() => setStatusFilter('all')}
@@ -1224,7 +1356,8 @@ export default function App() {
                           <div className="flex items-center gap-1.5">
                             <span className="font-bold text-slate-900 text-sm whitespace-nowrap">{a.display_name}</span>
                             {a.vip && (
-                              <span className="bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-extrabold px-1.5 py-0.2 rounded whitespace-nowrap">
+                              <span className="badge-vip whitespace-nowrap">
+                                <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>star</span>
                                 VIP
                               </span>
                             )}
@@ -1232,27 +1365,27 @@ export default function App() {
                         </td>
                         <td className="px-3.5 py-3 whitespace-nowrap">
                           {a.status === 'high_risk' && (
-                            <span className="bg-purple-50 text-purple-800 border border-purple-200 font-bold px-2 py-0.5 rounded text-[11px] whitespace-nowrap">
+                            <span className="badge-high-risk whitespace-nowrap">
                               고위험 후보
                             </span>
                           )}
                           {a.status === 'risk' && (
-                            <span className="bg-rose-50 text-rose-800 border border-rose-200 font-bold px-2 py-0.5 rounded text-[11px] whitespace-nowrap">
+                            <span className="badge-risk whitespace-nowrap">
                               이탈 위험 후보
                             </span>
                           )}
                           {a.status === 'attention' && (
-                            <span className="bg-amber-50 text-amber-800 border border-amber-200 font-bold px-2 py-0.5 rounded text-[11px] whitespace-nowrap">
+                            <span className="badge-attention whitespace-nowrap">
                               관심 필요
                             </span>
                           )}
                           {a.status === 'normal' && (
-                            <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold px-2 py-0.5 rounded text-[11px] whitespace-nowrap">
+                            <span className="badge-normal whitespace-nowrap">
                               정상 관리
                             </span>
                           )}
                           {a.status === 'hold' && (
-                            <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold px-2 py-0.5 rounded text-[11px] whitespace-nowrap">
+                            <span className="badge-hold whitespace-nowrap">
                               판단 보류
                             </span>
                           )}
@@ -1281,7 +1414,7 @@ export default function App() {
                             className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-1.5 px-3.5 rounded-lg inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors shadow-xs min-w-[96px]"
                           >
                             <span className="whitespace-nowrap">문안 준비</span>
-                            <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+                            <span className="material-symbols-outlined shrink-0" style={{ fontSize: '15px' }}>arrow_forward</span>
                           </button>
                         </td>
                       </tr>
@@ -1295,7 +1428,7 @@ export default function App() {
             <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                  <Calendar className="w-5 h-5 text-sky-600" />
+                  <span className="material-symbols-outlined text-sky-600" style={{ fontSize: '20px' }}>event_upcoming</span>
                   후속 조치 예정 현황
                 </h3>
                 {followupsList.length > 0 && (
@@ -1303,7 +1436,8 @@ export default function App() {
                     onClick={handleExportTouchpointsCSV}
                     className="text-xs text-slate-600 hover:text-slate-900 font-semibold flex items-center gap-1"
                   >
-                    <Download className="w-3.5 h-3.5" /> CSV 내보내기
+                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>download</span>
+                    CSV 내보내기
                   </button>
                 )}
               </div>
@@ -1393,7 +1527,8 @@ export default function App() {
             {/* Top Selector & Navigation */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-4">
               <div className="flex-1 max-w-md">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>apartment</span>
                   분석할 거래처 선택 ({assessments.length}곳 중 선택)
                 </label>
                 <select
@@ -1413,7 +1548,7 @@ export default function App() {
                 onClick={() => setPage('dashboard')}
                 className="inline-flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-4 rounded-xl transition-colors border border-slate-200"
               >
-                <ArrowLeft className="w-3.5 h-3.5" />
+                <span className="material-symbols-outlined text-sm">arrow_back</span>
                 대시보드로 돌아가기
               </button>
             </div>
@@ -1426,8 +1561,9 @@ export default function App() {
                     {currentAssessment.display_name}
                   </h2>
                   {currentAssessment.vip && (
-                    <span className="bg-amber-100 text-amber-800 border border-amber-300 text-xs font-extrabold px-2 py-0.5 rounded-md flex items-center gap-1">
-                      <Star className="w-3 h-3 fill-amber-600" /> VIP 거래처
+                    <span className="badge-vip">
+                      <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>star</span>
+                      VIP 거래처
                     </span>
                   )}
                 </div>
@@ -1472,27 +1608,27 @@ export default function App() {
 
               <div>
                 {currentAssessment.status === 'high_risk' && (
-                  <span className="bg-purple-100 text-purple-900 border border-purple-200 text-sm font-extrabold px-3 py-1.5 rounded-lg">
+                  <span className="badge-high-risk" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
                     🚨 고위험 후보
                   </span>
                 )}
                 {currentAssessment.status === 'risk' && (
-                  <span className="bg-rose-100 text-rose-900 border border-rose-200 text-sm font-extrabold px-3 py-1.5 rounded-lg">
+                  <span className="badge-risk" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
                     ⚠️ 이탈 위험 후보
                   </span>
                 )}
                 {currentAssessment.status === 'attention' && (
-                  <span className="bg-amber-100 text-amber-900 border border-amber-200 text-sm font-extrabold px-3 py-1.5 rounded-lg">
+                  <span className="badge-attention" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
                     👀 관심 필요
                   </span>
                 )}
                 {currentAssessment.status === 'normal' && (
-                  <span className="bg-emerald-100 text-emerald-900 border border-emerald-200 text-sm font-extrabold px-3 py-1.5 rounded-lg">
+                  <span className="badge-normal" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
                     ✅ 정상 관리
                   </span>
                 )}
                 {currentAssessment.status === 'hold' && (
-                  <span className="bg-slate-200 text-slate-800 border border-slate-300 text-sm font-extrabold px-3 py-1.5 rounded-lg">
+                  <span className="badge-hold" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
                     ⏸️ 판단 보류
                   </span>
                 )}
@@ -1501,7 +1637,7 @@ export default function App() {
 
             {/* 5 Numerical Metric Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-center">
+              <div className="metric-box">
                 <div className="text-xs font-bold text-slate-500">최근 거래일</div>
                 <div className="text-base font-extrabold text-slate-800 font-mono my-1">
                   {currentAssessment.last_date}
@@ -1509,7 +1645,7 @@ export default function App() {
                 <div className="text-[11px] text-slate-400">최근 발주 일자</div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-center">
+              <div className="metric-box">
                 <div className="text-xs font-bold text-slate-500">공백 일수</div>
                 <div className="text-2xl font-black text-rose-600 font-mono my-1">
                   {currentAssessment.gap_days}일
@@ -1517,7 +1653,7 @@ export default function App() {
                 <div className="text-[11px] text-slate-400">기준일 대비 경과</div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-center">
+              <div className="metric-box">
                 <div className="text-xs font-bold text-slate-500">평소 주문 주기</div>
                 <div className="text-2xl font-black text-slate-800 font-mono my-1">
                   {currentAssessment.median_interval ? `${Math.round(currentAssessment.median_interval)}일` : '-'}
@@ -1525,7 +1661,7 @@ export default function App() {
                 <div className="text-[11px] text-slate-400">간격 중앙값</div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-center">
+              <div className="metric-box">
                 <div className="text-xs font-bold text-slate-500">주기 대비 배수</div>
                 <div className="text-2xl font-black text-purple-600 font-mono my-1">
                   {currentAssessment.ratio ? `${currentAssessment.ratio}배` : '-'}
@@ -1533,7 +1669,7 @@ export default function App() {
                 <div className="text-[11px] text-slate-400">공백 / 평소 간격</div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs text-center">
+              <div className="metric-box">
                 <div className="text-xs font-bold text-slate-500">분석 신뢰도</div>
                 <div className="text-base font-extrabold text-blue-600 my-1">
                   {currentAssessment.confidence === 'high'
@@ -1549,7 +1685,7 @@ export default function App() {
             {/* Questions Box & Warning Statement */}
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
               <div className="font-bold text-slate-900 text-xs mb-2 flex items-center gap-1.5">
-                <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '18px' }}>checklist</span>
                 대표 확인 질문 (연락 전 점검사항)
               </div>
               <ul className="list-disc list-inside text-xs text-slate-600 space-y-1 pl-1">
@@ -1558,76 +1694,82 @@ export default function App() {
                 ))}
               </ul>
               <div className="mt-3 pt-2.5 border-t border-dashed border-slate-300 text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="material-symbols-outlined text-amber-600 shrink-0" style={{ fontSize: '16px' }}>warning</span>
                 거래 이력만으로 이탈을 확정할 수 없습니다.
               </div>
             </div>
 
-            {/* Interval History Visual & Recent 10 Transactions */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-                <h4 className="font-bold text-slate-900 text-xs mb-3 flex items-center gap-1.5">
-                  <BarChart3 className="w-4 h-4 text-blue-600" />
-                  거래일별 간격 추이 (일 단위)
-                </h4>
-                {currentAssessment.intervals.length > 0 ? (
-                  <div>
-                    <div className="flex items-end gap-2 h-32 pt-4 px-2 border-b border-slate-200">
-                      {currentAssessment.intervals.map((inv, idx) => {
-                        const maxVal = Math.max(...currentAssessment.intervals, 40);
-                        const heightPct = Math.min(100, Math.max(15, (inv / maxVal) * 100));
-                        return (
-                          <div key={idx} className="flex-1 flex flex-col items-center gap-1 group relative">
-                            <span className="text-[9px] font-mono text-slate-500">{inv}d</span>
-                            <div
-                              style={{ height: `${heightPct}%` }}
-                              className="w-full bg-blue-500 hover:bg-blue-600 rounded-t-sm transition-all"
-                            />
-                          </div>
-                        );
-                      })}
+            {/* Interval History Visual (ztd-charts) & Recent 10 Transactions */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
+              <div className="lg:col-span-7">
+                <ChartCard
+                  number="01"
+                  title="주문 간격 이력 및 최근 공백 분석"
+                  subtitle="과거 주문 주기 추이와 기준일 대비 발생한 최근 공백 비교"
+                  takeaway={
+                    currentAssessment.ratio
+                      ? `평소 ${Math.round(currentAssessment.median_interval || 0)}일 주기 대비 최근 공백 ${currentAssessment.gap_days}일로 ${currentAssessment.ratio}배 지연`
+                      : `평소 간격 ${Math.round(currentAssessment.median_interval || 0)}일 수준 유지 중`
+                  }
+                  accent="공백"
+                  level="basic"
+                  replay
+                >
+                  {customerIntervalChartData.length > 0 ? (
+                    <BarChart
+                      data={customerIntervalChartData}
+                      x="label"
+                      y="days"
+                      highlight="최근 공백"
+                      unit="일"
+                      locale="ko-KR"
+                      height={210}
+                      annotations={customerChartAnnotations}
+                    />
+                  ) : (
+                    <div className="h-52 flex items-center justify-center text-xs text-slate-400">
+                      거래일 수가 부족하여 간격 차트를 표시할 수 없습니다.
                     </div>
-                    <div className="flex justify-between items-center text-[11px] text-slate-400 mt-2">
-                      <span>평소 간격(중앙값): {currentAssessment.median_interval ? `${Math.round(currentAssessment.median_interval)}일` : '-'}</span>
-                      <span>최근 {currentAssessment.intervals.length}회 거래 주기</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-32 flex items-center justify-center text-xs text-slate-400">
-                    거래일 수가 부족하여 간격 차트를 표시할 수 없습니다.
-                  </div>
-                )}
+                  )}
+                </ChartCard>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-                <h4 className="font-bold text-slate-900 text-xs mb-3 flex items-center gap-1.5">
-                  <Clock className="w-4 h-4 text-slate-600" />
-                  최근 거래 내역 (최대 10건)
-                </h4>
-                <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-48">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-100 text-slate-600 font-bold sticky top-0 border-b border-slate-200">
-                      <tr>
-                        <th className="px-3 py-2">거래일</th>
-                        <th className="px-3 py-2">금액</th>
-                        <th className="px-3 py-2">품목</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 font-mono">
-                      {cleanRows
-                        .filter(r => r.customer_key === currentAssessment.customer_key)
-                        .slice(0, 10)
-                        .map((r, i) => (
-                          <tr key={i} className="hover:bg-slate-50">
-                            <td className="px-3 py-1.5">{r.date}</td>
-                            <td className="px-3 py-1.5 font-sans font-medium text-slate-800">
-                              {r.amount.toLocaleString()}원
-                            </td>
-                            <td className="px-3 py-1.5 font-sans text-slate-600">{r.item || '-'}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+              <div className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
+                <div>
+                  <h4 className="font-bold text-slate-900 text-xs mb-3 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-slate-600" style={{ fontSize: '18px' }}>schedule</span>
+                    최근 거래 내역 (최대 10건)
+                  </h4>
+                  <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-56">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100 text-slate-600 font-bold sticky top-0 border-b border-slate-200">
+                        <tr>
+                          <th className="px-3 py-2">거래일</th>
+                          <th className="px-3 py-2">금액</th>
+                          <th className="px-3 py-2">품목</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                        {cleanRows
+                          .filter(r => r.customer_key === currentAssessment.customer_key)
+                          .slice(0, 10)
+                          .map((r, i) => (
+                            <tr key={i} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-3 py-1.5 text-slate-700 whitespace-nowrap">{r.date}</td>
+                              <td className="px-3 py-1.5 font-sans font-medium text-slate-800 whitespace-nowrap">
+                                {r.amount ? `₩${r.amount.toLocaleString()}` : '-'}
+                              </td>
+                              <td className="px-3 py-1.5 font-sans text-slate-600 truncate max-w-[120px]">{r.item || '-'}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+                  <span>총 거래일 수: {currentAssessment.txn_days}일</span>
+                  <span>최종 거래일: {currentAssessment.last_date}</span>
                 </div>
               </div>
             </div>
@@ -1636,7 +1778,7 @@ export default function App() {
             <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
               <div className="flex items-center justify-between pb-3 border-b border-slate-200">
                 <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                  <Send className="w-4 h-4 text-blue-600" />
+                  <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '20px' }}>edit_note</span>
                   맞춤형 연락 문안 준비 (발송은 사용자가 직접 수행)
                 </h3>
               </div>
@@ -1645,24 +1787,24 @@ export default function App() {
               <div className="flex border-b border-slate-200">
                 <button
                   onClick={() => setActiveTab('email')}
-                  className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold border-b-2 transition-colors ${
+                  className={`flex items-center gap-1.5 px-5 py-2.5 text-xs font-bold border-b-2 transition-colors ${
                     activeTab === 'email'
                       ? 'border-blue-600 text-blue-600'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
                   이메일 초안
                 </button>
                 <button
                   onClick={() => setActiveTab('call')}
-                  className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold border-b-2 transition-colors ${
+                  className={`flex items-center gap-1.5 px-5 py-2.5 text-xs font-bold border-b-2 transition-colors ${
                     activeTab === 'call'
                       ? 'border-blue-600 text-blue-600'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
-                  <Phone className="w-3.5 h-3.5" />
+                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>call</span>
                   통화 가이드
                 </button>
               </div>
@@ -1690,7 +1832,7 @@ export default function App() {
                         disabled={isGeneratingEmail}
                         className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-xs"
                       >
-                        <Sparkles className="w-3.5 h-3.5" />
+                        <span className="material-symbols-outlined text-sm">auto_awesome</span>
                         <span>{isGeneratingEmail ? '작성 중...' : '이메일 초안 생성'}</span>
                       </button>
 
@@ -1699,7 +1841,7 @@ export default function App() {
                         disabled={isGeneratingEmail}
                         className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-200"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span className="material-symbols-outlined text-sm">sync</span>
                         <span>Live</span>
                       </button>
                     </div>
@@ -1711,7 +1853,7 @@ export default function App() {
                         <span className="bg-blue-100 text-blue-800 font-extrabold px-2.5 py-0.5 rounded-md">
                           AI 초안
                         </span>
-                        <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md text-[11px]">
+                        <span className="source-tag">
                           {currentEmailDraft.source === 'live'
                             ? 'Liner/Gemini API 응답'
                             : currentEmailDraft.source === 'cache'
@@ -1750,7 +1892,8 @@ export default function App() {
                             onClick={handleSaveEditedEmail}
                             className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs py-2 px-4 rounded-lg flex items-center gap-1.5 transition-colors"
                           >
-                            <span>💾 수정본 저장</span>
+                            <span className="material-symbols-outlined text-sm">save</span>
+                            <span>수정본 저장</span>
                           </button>
                           {saveDraftFeedback && (
                             <span className="text-xs text-emerald-600 font-bold">
@@ -1766,7 +1909,7 @@ export default function App() {
                             className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
                             title="기본 메일 클라이언트(Outlook 등)로 새 메일 열기"
                           >
-                            <Mail className="w-3.5 h-3.5 text-blue-600" />
+                            <span className="material-symbols-outlined text-blue-600 text-sm">mail</span>
                             <span>기본 메일 앱 열기</span>
                           </button>
                           <button
@@ -1774,7 +1917,7 @@ export default function App() {
                             className="bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs py-2 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-red-200"
                             title="웹 브라우저에서 Gmail 작성창 바로 열기"
                           >
-                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span className="material-symbols-outlined text-sm">open_in_new</span>
                             <span>Gmail 웹으로 열기</span>
                           </button>
                         </div>
@@ -1790,12 +1933,12 @@ export default function App() {
                           >
                             {copiedType === 'email' ? (
                               <>
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="material-symbols-outlined text-emerald-400 text-sm">check</span>
                                 <span className="text-emerald-400">복사 완료!</span>
                               </>
                             ) : (
                               <>
-                                <Copy className="w-3.5 h-3.5" />
+                                <span className="material-symbols-outlined text-sm">content_copy</span>
                                 <span>본문 복사</span>
                               </>
                             )}
@@ -1821,7 +1964,7 @@ export default function App() {
                       disabled={isGeneratingCall}
                       className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-4 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
                     >
-                      <Sparkles className="w-3.5 h-3.5" />
+                      <span className="material-symbols-outlined text-sm">auto_awesome</span>
                       <span>{isGeneratingCall ? '작성 중...' : '통화 가이드 생성'}</span>
                     </button>
 
@@ -1830,7 +1973,7 @@ export default function App() {
                       disabled={isGeneratingCall}
                       className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
                     >
-                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span className="material-symbols-outlined text-sm">sync</span>
                       <span>Live</span>
                     </button>
                   </div>
@@ -1841,7 +1984,7 @@ export default function App() {
                         <span className="bg-blue-100 text-blue-800 font-extrabold px-2.5 py-0.5 rounded-md">
                           AI 초안
                         </span>
-                        <span className="bg-slate-100 text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md text-[11px]">
+                        <span className="source-tag">
                           {currentCallDraft.source === 'live'
                             ? 'Liner/Gemini API 응답'
                             : currentCallDraft.source === 'cache'
@@ -1903,12 +2046,12 @@ export default function App() {
                           >
                             {copiedType === 'call' ? (
                               <>
-                                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="material-symbols-outlined text-emerald-400 text-sm">check</span>
                                 <span className="text-emerald-400">복사 완료!</span>
                               </>
                             ) : (
                               <>
-                                <Copy className="w-3.5 h-3.5" />
+                                <span className="material-symbols-outlined text-sm">content_copy</span>
                                 <span>가이드 복사</span>
                               </>
                             )}
@@ -1927,7 +2070,7 @@ export default function App() {
             {/* Contact Record Form */}
             <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
               <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                <FileText className="w-4 h-4 text-emerald-600" />
+                <span className="material-symbols-outlined text-emerald-600" style={{ fontSize: '20px' }}>history_edu</span>
                 거래처 접촉 결과 기록
               </h3>
 
@@ -2036,14 +2179,16 @@ export default function App() {
 
                 <button
                   type="submit"
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-colors shadow-xs"
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-colors shadow-xs flex items-center justify-center gap-1.5"
                 >
-                  💾 접촉 기록 저장
+                  <span className="material-symbols-outlined text-sm">save</span>
+                  <span>접촉 기록 저장</span>
                 </button>
 
                 {touchSuccessMsg && (
-                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs p-3 rounded-lg font-bold">
-                    {touchSuccessMsg}
+                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs p-3 rounded-lg font-bold flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-emerald-600 text-sm">check_circle</span>
+                    <span>{touchSuccessMsg}</span>
                   </div>
                 )}
               </form>
@@ -2115,8 +2260,8 @@ export default function App() {
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-blue-50 text-blue-600">
-                  <Key className="w-5 h-5" />
+                <div className="p-2 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <span className="material-symbols-outlined">key</span>
                 </div>
                 <h3 className="font-extrabold text-slate-900 text-base">LLM API 키 설정</h3>
               </div>
@@ -2124,7 +2269,7 @@ export default function App() {
                 onClick={() => setShowKeyModal(false)}
                 className="text-slate-400 hover:text-slate-600"
               >
-                <X className="w-5 h-5" />
+                <span className="material-symbols-outlined">close</span>
               </button>
             </div>
 
@@ -2171,6 +2316,7 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </ThemeProvider>
   );
 }
