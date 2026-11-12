@@ -1,11 +1,147 @@
-<div align="center">
+# Magentify Mini (마젠티파이 미니)
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+> **소규모 제조업 대표를 위한 거래처 발주 주기 & 이탈 위험 감지 에이전트**  
+> 라이너 해커톤 (.EXE-THON) · 개발 기간: 2026-11-12 ~ 11-25  
+> **핵심 원칙**: 숫자와 판정은 코드(pandas)가, 말과 연락 전략은 Liner Model API가, 최종 판단과 발송은 사람이 한다.
 
-  <h1>Built with AI Studio</h2>
+---
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+## 1. 제품 개요
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+- **한 줄 정의**: 엑셀 거래 내역(CSV/XLSX)을 올리면 평소 발주 간격보다 연락이 뜸해진 거래처를 객관적 수치 근거와 함께 탐지하고, 대표가 바로 검토·활용할 수 있는 이메일 초안과 통화 가이드까지 준비해 주는 로컬 에이전트.
+- **주요 사용자**: 거래처 발주 흐름을 엑셀로 관리하며, 바쁜 생산 일정으로 인해 거래처 안부 연락과 이탈 방지 시점을 놓치기 쉬운 소규모 제조사 대표 (단일 사용자, 로그인 없음).
+- **디자인 컨셉**: 신뢰도 높은 B2B 엔지니어링 감성의 **플랫 벡터 스타일**, **프리텐다드(Pretendard)** 고품질 한글 서체, **구글 머티리얼 심볼(Material Symbols)** 아이콘 적용.
 
-</div>
+---
+
+## 2. 핵심 아키텍처 및 역할 분담
+
+```
+[사용자 브라우저]
+       │
+[Streamlit app.py] (3개 화면: 데이터 등록 -> 현황 대시보드 -> 거래처 상세 및 문안)
+       │
+       ├─> core/ingest.py    ──> 파일 읽기 (CSV/XLSX), 동의어 컬럼 매핑, 품질 검사 5종
+       ├─> core/analysis.py  ──> 순수 함수 (주기·공백·배수·상태·우선순위 산출, I/O 없음)
+       ├─> core/llm.py       ──> Liner Model API 호출, 3단계 출력 검증, 응답 캐시, 폴백
+       └─> core/store.py     ──> 순수 SQLite 저장소 (설정, 플래그, 초안, 접촉 이력, API 로그)
+```
+
+| 구분 | 담당 모듈 | 수행 업무 및 원칙 |
+| :--- | :--- | :--- |
+| **코드 (pandas)** | `core/ingest.py`<br>`core/analysis.py` | • 거래처 키 정규화 (㈜·공백 제거, 소문자화)<br>• 품질 검사 5종 (중복, 음수 취소, 날짜 오류, 미래 거래, 유사 이름)<br>• 거래 간격 중앙값 대비 공백 배수 계산 및 5단계 상태 분류<br>• VIP 가산점 반영 우선순위 정렬 및 템플릿 근거 생성 |
+| **Liner Model API** | `core/llm.py` | • 주간 브리핑, 안부 이메일 초안, 전화 통화 가이드 작성<br>• **개인정보 보호**: 실제 거래처명 대신 익명 별칭(C01...)과 요약 수치만 전송<br>• **안전 검증**: 금지어(확정, 손실, 할인 등) 및 입력 외 숫자 인용 검증 |
+| **사용자 (대표)** | `app.py` | • 컬럼 매핑 확인, VIP/프로젝트성 플래그 지정<br>• AI 초안 검토 및 말투 수정, 원클릭 복사<br>• 직접 발송/통화 수행 후 접촉 결과 및 다음 연락일 기록 |
+
+---
+
+## 3. 디렉터리 구조
+
+```
+magentify-mini/
+├── app.py                      # Streamlit 3개 화면 + 사이드바
+├── core/
+│   ├── __init__.py
+│   ├── models.py               # QualityResult, Assessment, LlmResult, AppError
+│   ├── ingest.py               # read_file, suggest_mapping, build_clean (품질 검사 5종)
+│   ├── analysis.py             # normalize_key, assign_aliases, analyze, prioritize, summarize
+│   ├── llm.py                  # 프롬프트, 3단계 검증, 응답 캐시, 폴백, 호출 계층
+│   └── store.py                # 순수 sqlite3 (settings, customer_flags, drafts, touchpoints, api_logs)
+├── demo/
+│   ├── __init__.py
+│   └── make_demo_data.py       # 난수 없이 항상 동일한 126행 생성기
+├── tests/
+│   ├── __init__.py
+│   ├── test_golden.py          # 12개 거래처 수치·카운트·우선순위 골든 테스트
+│   └── test_llm_validate.py    # 금지어·미허용 숫자·타임아웃·폴백 mock 테스트
+├── data/
+│   ├── app.db                  # 로컬 SQLite 데이터베이스 (Git 제외)
+│   ├── demo_transactions.csv   # 가상 제조 거래처 12곳 126행 데이터
+│   ├── cache/                  # API 응답 캐시 JSON
+│   └── uploads/                # 업로드된 원장 사본
+├── .env.example                # 환경변수 설정 예시
+├── .gitignore                  # DB, 업로드 파일, API 키 격리
+├── requirements.txt            # Python 필수 패키지
+└── README.md                   # 프로젝트 문서
+```
+
+---
+
+## 4. 설치 및 로컬 실행 방법
+
+### 요구 사양
+- Python 3.10 이상 (3.11 권장)
+
+### 1) 저장소 클론 및 패키지 설치
+```bash
+git clone <저장소 URL>
+cd magentify-mini
+pip install -r requirements.txt
+```
+
+### 2) 환경변수 설정 (`.env`)
+`.env.example`을 복사하여 `.env`를 생성합니다.
+```bash
+cp .env.example .env
+```
+```ini
+# Liner Model API 키 (키가 없으면 자동으로 안전한 기본 템플릿/폴백 모드로 동작합니다)
+LINER_API_KEY=""
+LINER_BASE_URL=""
+LINER_MODEL=""
+
+# 호출 제어 및 기본 설정
+LINER_TIMEOUT_SEC=20
+LINER_DAILY_LIMIT=200
+DEMO_MODE=1
+REF_DATE_DEFAULT="2026-11-30"
+DB_PATH="./data/app.db"
+```
+
+### 3) 앱 실행
+```bash
+streamlit run app.py
+```
+브라우저에서 `http://localhost:8501`로 접속합니다.
+
+---
+
+## 5. 5분 시연 시나리오 완주 가이드 (PRD 2.2 기준)
+
+| 시간 | 화면 | 시연 동작 | 화면 확인 포인트 |
+| :--- | :--- | :--- | :--- |
+| **0:00~0:30** | 문제 소개 | 소규모 제조사 대표의 거래처 관리 페인포인트 설명 | 거래 원장은 있으나 일일이 주기를 챙기지 못해 발생하는 발주 누락 문제 |
+| **0:30~1:10** | **데이터 등록** | • 사이드바에서 기준일 `2026-11-30` 확인<br>• `[데모 파일 불러오기]` 클릭<br>• 컬럼 자동 매핑 확인 후 `[분석 실행]` | • 정상 123행, 중복 1건, 취소 1건, 날짜 오류 1건 (총 126행)<br>• 유사 거래처명(`삼우정밀` ↔ `삼우정밀(2공장)`) 경고 표시 (자동 병합 없음) |
+| **1:10~2:00** | **현황 대시보드** | • 요약 카드 확인<br>• `[이번 주 브리핑]` 클릭<br>• 우선 확인 목록 검토 | • 요약 카드: 정상 5, 관심 1, 위험 2, 고위험 1, 보류 3<br>• 브리핑 카드: "Liner Model API 응답" 라벨 및 핵심 연락 전략<br>• 우선순위 1위: `대성정밀` (VIP, 우선 연락 검토) |
+| **2:00~2:50** | **거래처 상세** | 1순위 `대성정밀`의 `[문안 준비]` 버튼 클릭 | • 최근 거래 2026-09-28, 공백 63일, 평소 간격 30일의 **2.1배**<br>• 거래일 수 14회 (신뢰도 높음), VIP 배지<br>• 확인 질문 2개 및 고정 문구: **"거래 이력만으로 이탈을 확정할 수 없습니다."** |
+| **2:50~3:50** | **문안 준비** | • `[이메일 초안 생성]` 클릭<br>• `[통화 가이드 생성]` (또는 라이브 호출) | • "AI 초안" 라벨 표시<br>• 가격·납기·할인 약속 없음 확인<br>• `[거래처명]` 자리표시자 자동 치환 |
+| **3:50~4:30** | **수정 및 복사** | • 이메일 본문에서 안부 문장 1줄 수정<br>• `[수정본 저장]` 후 복사 코드 영역 클릭 | • 수정본 저장 완료 메시지<br>• 원클릭 복사 영역에서 메일 프로그램으로 붙여넣기 준비 |
+| **4:30~5:00** | **접촉 기록** | • 접촉 채널: **이메일**<br>• 접촉 결과: **회신 대기**<br>• 다음 연락일: **2026-12-07** 지정<br>• `[접촉 기록 저장]` 후 대시보드 복귀 | • 대시보드 '후속 조치 예정' 목록에 `대성정밀` (2026-12-07 예정) 즉시 반영 |
+
+---
+
+## 6. 테스트 수행
+
+모든 골든 메트릭 및 LLM 안전성 테스트는 `pytest`로 검증할 수 있습니다.
+```bash
+# 전체 테스트 실행 (13개 테스트)
+PYTHONPATH=. pytest -v
+
+# 1) 12개 거래처 수치 및 정합성 골든 테스트
+PYTHONPATH=. pytest tests/test_golden.py -v
+
+# 2) LLM 검증 및 폴백 동작 테스트
+PYTHONPATH=. pytest tests/test_llm_validate.py -v
+```
+
+---
+
+## 7. 보안 및 안전성 점검 (API 키 유출 방지)
+
+저장소 내 실제 API 키 및 시크릿이 포함되어 있지 않은지 아래 명령어로 검증할 수 있습니다:
+```bash
+# API 키 패턴 검색 (결과가 없어야 함)
+grep -rnE "(sk-[a-zA-Z0-9]{20,}|LINER_API_KEY=\".+\")" . --exclude-dir=node_modules --exclude-dir=.git
+```
+- 모든 실제 API 키는 `.env`에 격리되어 `.gitignore`에 의해 버전 관리에서 제외됩니다.
+- API 호출 시 실제 거래처명, 담당자명, 연락처는 일체 전송되지 않으며 가상 식별자(C01...)만 사용됩니다.

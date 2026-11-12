@@ -1,0 +1,21 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.streamlit/
+
+# App data
+data/app.db*
+data/uploads/*
+!data/uploads/.gitkeep
+data/demo_transactions.csv
+!data/demo_transactions.csv
+!data/cache/
