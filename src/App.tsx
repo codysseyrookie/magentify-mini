@@ -1,17 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { ChartCard, BarChart, DonutChart, ThemeProvider } from 'ztd-charts';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { ThemeProvider } from 'ztd-charts';
 import {
   Assessment,
   CleanTransaction,
   ColumnMapping,
   QualityResult,
   BriefingContent,
-  EmailDraftContent,
-  CallGuideContent,
   DraftRecord,
   TouchpointRecord,
   LlmResult,
-  AssessmentStatus
 } from './types';
 import { DEMO_CSV_DATA, parseCSV, parseExcelBuffer, downloadCSV } from './demoData';
 import {
@@ -20,13 +17,13 @@ import {
   analyze,
   prioritize,
   summarize,
-  normalizeKey
 } from './analysis';
 import {
+  MessageTone,
   generateBriefing,
   generateEmail,
   generateCallGuide,
-  renderPlaceholders
+  renderPlaceholders,
 } from './llm';
 import {
   getFlags,
@@ -36,22 +33,55 @@ import {
   saveDraft,
   updateDraftText,
   latestDraft,
+  getDrafts,
   addTouchpoint,
+  deleteTouchpoint,
+  getTouchpoints,
   listTouchpoints,
   getFollowups,
-  resetDemo
+  resetDemo,
 } from './storage';
+import { OverviewPage } from './components/OverviewPage';
+import { CustomersPage, CustomerFilterType } from './components/CustomersPage';
+import { MessagePage } from './components/MessagePage';
+import { ImportPage } from './components/ImportPage';
+import { SettingsPage } from './components/SettingsPage';
+
+type NavTab = 'overview' | 'customers' | 'message' | 'import' | 'settings';
+
+interface ToastState {
+  id: number;
+  message: string;
+  undoLabel?: string;
+  onUndo?: () => void;
+}
+
+const NAV_ITEMS: { id: NavTab; label: string; icon: string }[] = [
+  { id: 'overview', label: '개요', icon: 'grid_view' },
+  { id: 'customers', label: '거래처', icon: 'groups' },
+  { id: 'message', label: '문안', icon: 'edit_note' },
+  { id: 'import', label: '가져오기', icon: 'upload_file' },
+  { id: 'settings', label: '설정', icon: 'settings' },
+];
 
 export default function App() {
-  // Navigation
-  const [page, setPage] = useState<'dashboard' | 'data' | 'customer'>('dashboard');
+  // Navigation & Theme
+  const [activeNav, setActiveNav] = useState<NavTab>('overview');
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>(() =>
+    getSetting('theme_mode', 'light') === 'dark' ? 'dark' : 'light'
+  );
 
   // Global settings & parameters
   const [refDate, setRefDate] = useState<string>(() => getSetting('ref_date', '2026-11-30'));
+  const [weeklyGoal, setWeeklyGoal] = useState<number>(() => {
+    const val = Number(getSetting('weekly_goal', '5'));
+    return isNaN(val) || val < 1 ? 5 : val;
+  });
   const [demoMode, setDemoMode] = useState<boolean>(true);
-  const [apiKey, setApiKey] = useState<string>(() => getSetting('liner_api_key', ''));
-  const [showKeyModal, setShowKeyModal] = useState<boolean>(false);
-  const [tempApiKey, setTempApiKey] = useState<string>('');
+  const [serverLlmStatus, setServerLlmStatus] = useState<{ configured: boolean; provider: string }>({
+    configured: false,
+    provider: 'fallback',
+  });
 
   // Data state
   const [rawRows, setRawRows] = useState<Record<string, string>[]>([]);
@@ -65,28 +95,30 @@ export default function App() {
   });
   const [quality, setQuality] = useState<QualityResult | null>(null);
   const [cleanRows, setCleanRows] = useState<CleanTransaction[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Selected customer for Screen 3
+  // Selected customer & bulk workflow queue
   const [selectedKey, setSelectedKey] = useState<string>('대성정밀');
+  const [bulkQueue, setBulkQueue] = useState<string[]>([]);
 
-  // Customer Flags
+  // Flags & Storage revision counter for instant UI reactivity
   const [flags, setFlagsState] = useState(() => getFlags());
+  const [storageTick, setStorageTick] = useState<number>(0);
 
   // Briefing state
   const [briefing, setBriefing] = useState<LlmResult<BriefingContent> | null>(null);
   const [isBriefingLoading, setIsBriefingLoading] = useState<boolean>(false);
 
-  // Customer Detail Screen States
+  // Customer Message Editor state
   const [contactName, setContactName] = useState<string>('');
+  const [activeTab, setActiveTab] = useState<'email' | 'call'>('email');
+  const [tone, setTone] = useState<MessageTone>('정중하게');
   const [currentEmailDraft, setCurrentEmailDraft] = useState<DraftRecord | null>(null);
   const [currentCallDraft, setCurrentCallDraft] = useState<DraftRecord | null>(null);
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [emailBody, setEmailBody] = useState<string>('');
   const [isGeneratingEmail, setIsGeneratingEmail] = useState<boolean>(false);
   const [isGeneratingCall, setIsGeneratingCall] = useState<boolean>(false);
-  const [copiedType, setCopiedType] = useState<string | null>(null);
-  const [saveDraftFeedback, setSaveDraftFeedback] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'email' | 'call'>('email');
 
   // Touchpoint Form
   const [touchDate, setTouchDate] = useState<string>(refDate);
@@ -96,33 +128,73 @@ export default function App() {
   const [hasNextDate, setHasNextDate] = useState<boolean>(true);
   const [nextContactDate, setNextContactDate] = useState<string>('2026-12-07');
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(null);
-  const [touchSuccessMsg, setTouchSuccessMsg] = useState<string | null>(null);
 
-  // Search & Filter state for Dashboard
+  // Customers Search & Filter
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'priority' | 'risk_only' | 'vip' | 'normal' | 'hold'>('all');
+  const [statusFilter, setStatusFilter] = useState<CustomerFilterType>('all');
 
-  // Reset confirmation
-  const [resetConfirmed, setResetConfirmed] = useState<boolean>(false);
+  // Popovers, Modals & Toast
+  const [showNotifPopover, setShowNotifPopover] = useState<boolean>(false);
+  const [showHelpModal, setShowHelpModal] = useState<boolean>(false);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
-  // Initial load of demo data
+  // Sync theme attribute on document root
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', themeMode);
+    setSetting('theme_mode', themeMode);
+  }, [themeMode]);
+
+  // Initial load of demo data and server LLM status
   useEffect(() => {
     loadDemoData(refDate);
+    fetch('/api/llm/status')
+      .then(r => r.json())
+      .then(data => setServerLlmStatus(data))
+      .catch(() => setServerLlmStatus({ configured: false, provider: 'fallback' }));
   }, []);
 
-  // Update touchDate when refDate changes
   useEffect(() => {
     setTouchDate(refDate);
   }, [refDate]);
 
+  // Esc closes modals/popovers
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setShowHelpModal(false);
+        setShowNotifPopover(false);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  function showToast(message: string, undo?: { label?: string; onUndo: () => void }) {
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    const id = Date.now();
+    setToast({
+      id,
+      message,
+      undoLabel: undo ? (undo.label || '실행 취소') : undefined,
+      onUndo: undo?.onUndo,
+    });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(curr => (curr?.id === id ? null : curr));
+    }, 3200);
+  }
+
   function loadDemoData(currentRefDate: string) {
+    setUploadError(null);
     const { headers: parsedHeaders, rows: parsedRows } = parseCSV(DEMO_CSV_DATA);
     setHeaders(parsedHeaders);
     setRawRows(parsedRows);
     setFileName('demo_transactions.csv');
 
     const suggested = suggestMapping(parsedHeaders);
-    const effectiveMapping = {
+    const effectiveMapping: ColumnMapping = {
       customer: suggested.customer || '거래처',
       date: suggested.date || '거래일자',
       amount: suggested.amount || '금액',
@@ -135,11 +207,8 @@ export default function App() {
     setCleanRows(q.clean_rows);
   }
 
-  // Handle file upload supporting both CSV and XLSX / XLS
-  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  function handleFileSelected(file: File) {
+    setUploadError(null);
     const lowerName = file.name.toLowerCase();
     setFileName(file.name);
 
@@ -160,9 +229,12 @@ export default function App() {
             const q = buildClean(parsedRows, suggested, refDate);
             setQuality(q);
             setCleanRows(q.clean_rows);
+            showToast(`${file.name} 파일을 불러왔어요.`);
+          } else {
+            setQuality(null);
           }
         } catch (err: any) {
-          alert(`엑셀 파일 처리 중 오류가 발생했습니다: ${err.message}`);
+          setUploadError(`엑셀 파일을 읽지 못했어요. 파일 형식을 확인해주세요. (${err.message || ''})`);
         }
       };
       reader.readAsArrayBuffer(file);
@@ -172,36 +244,61 @@ export default function App() {
         const text = event.target?.result as string;
         if (!text) return;
 
-        const { headers: parsedHeaders, rows: parsedRows } = parseCSV(text);
-        setHeaders(parsedHeaders);
-        setRawRows(parsedRows);
-
-        const suggested = suggestMapping(parsedHeaders);
-        setMapping(suggested);
-
         try {
+          const { headers: parsedHeaders, rows: parsedRows } = parseCSV(text);
+          setHeaders(parsedHeaders);
+          setRawRows(parsedRows);
+
+          const suggested = suggestMapping(parsedHeaders);
+          setMapping(suggested);
+
           if (suggested.customer && suggested.date) {
             const q = buildClean(parsedRows, suggested, refDate);
             setQuality(q);
             setCleanRows(q.clean_rows);
+            showToast(`${file.name} 파일을 불러왔어요.`);
+          } else {
+            setQuality(null);
           }
         } catch (err: any) {
-          console.error(err);
+          setUploadError(`CSV 파일을 읽지 못했어요. UTF-8 또는 CP949 파일인지 확인해주세요.`);
         }
       };
       reader.readAsText(file, 'utf-8');
     }
   }
 
+  function handleMappingChange(nextMapping: ColumnMapping) {
+    setMapping(nextMapping);
+    setUploadError(null);
+    if (nextMapping.customer && nextMapping.date && nextMapping.customer !== nextMapping.date) {
+      try {
+        const q = buildClean(rawRows, nextMapping, refDate);
+        setQuality(q);
+        setCleanRows(q.clean_rows);
+      } catch (err: any) {
+        setUploadError(err.message || '열 매핑을 다시 확인해주세요.');
+      }
+    }
+  }
+
   function handleExecuteAnalysis() {
-    if (!mapping.customer || !mapping.date) return;
+    if (!mapping.customer || !mapping.date) {
+      setUploadError('거래처 열과 거래일자 열을 모두 선택해주세요.');
+      return;
+    }
+    if (mapping.customer === mapping.date) {
+      setUploadError('거래처 열과 거래일자 열은 서로 다른 열이어야 해요.');
+      return;
+    }
     try {
       const q = buildClean(rawRows, mapping, refDate);
       setQuality(q);
       setCleanRows(q.clean_rows);
-      setPage('dashboard');
+      setActiveNav('overview');
+      showToast('분석을 완료했어요.');
     } catch (err: any) {
-      alert(err.message || '분석 중 오류가 발생했습니다.');
+      setUploadError(err.message || '분석 중 문제가 발생했어요. 열 선택을 확인해주세요.');
     }
   }
 
@@ -217,32 +314,6 @@ export default function App() {
     return prioritize(assessments);
   }, [assessments]);
 
-  const displayedAssessments = useMemo(() => {
-    let list = assessments;
-
-    if (statusFilter === 'priority') {
-      list = priorityList;
-    } else if (statusFilter === 'risk_only') {
-      list = list.filter(a => a.status === 'risk' || a.status === 'high_risk');
-    } else if (statusFilter === 'vip') {
-      list = list.filter(a => a.vip);
-    } else if (statusFilter === 'normal') {
-      list = list.filter(a => a.status === 'normal');
-    } else if (statusFilter === 'hold') {
-      list = list.filter(a => a.status === 'hold');
-    }
-
-    if (searchQuery.trim()) {
-      const q = searchQuery.trim().toLowerCase();
-      list = list.filter(a =>
-        a.display_name.toLowerCase().includes(q) ||
-        a.alias.toLowerCase().includes(q)
-      );
-    }
-
-    return list;
-  }, [assessments, priorityList, statusFilter, searchQuery]);
-
   const customerNameMap = useMemo(() => {
     const map: Record<string, string> = {};
     for (const a of assessments) {
@@ -251,13 +322,31 @@ export default function App() {
     return map;
   }, [assessments]);
 
+  const allTouchpoints = useMemo(() => {
+    void storageTick;
+    return getTouchpoints();
+  }, [storageTick]);
+
+  const draftCustomerKeys = useMemo(() => {
+    void storageTick;
+    const drafts = getDrafts();
+    return new Set(drafts.map(d => d.customer_key));
+  }, [storageTick]);
+
   const followupsList = useMemo(() => {
+    void storageTick;
     return getFollowups(refDate, customerNameMap);
-  }, [refDate, customerNameMap]);
+  }, [refDate, customerNameMap, storageTick]);
 
   const currentAssessment = useMemo(() => {
     return assessments.find(a => a.customer_key === selectedKey) || assessments[0] || null;
   }, [assessments, selectedKey]);
+
+  const currentTouchHistory = useMemo(() => {
+    void storageTick;
+    if (!currentAssessment) return [];
+    return listTouchpoints(currentAssessment.customer_key);
+  }, [currentAssessment, storageTick]);
 
   useEffect(() => {
     if (!currentAssessment) return;
@@ -275,7 +364,6 @@ export default function App() {
 
     const clDraft = latestDraft(currentAssessment.customer_key, 'call');
     setCurrentCallDraft(clDraft);
-    setTouchSuccessMsg(null);
   }, [currentAssessment, contactName]);
 
   const recencyWarning = useMemo(() => {
@@ -292,80 +380,10 @@ export default function App() {
     return null;
   }, [assessments, refDate]);
 
-  // ztd-charts data for Customer Detail (Screen 3)
-  const customerIntervalChartData = useMemo(() => {
-    if (!currentAssessment) return [];
-    const rawIntervals = currentAssessment.intervals || [];
-    const recent = rawIntervals.slice(-6); // last up to 6 intervals
-    const data: { label: string; days: number }[] = [];
-
-    recent.forEach((val, idx) => {
-      const nth = recent.length - idx;
-      data.push({
-        label: `${nth}회 전`,
-        days: val,
-      });
-    });
-
-    data.push({
-      label: '최근 공백',
-      days: currentAssessment.gap_days,
-    });
-
-    return data;
-  }, [currentAssessment]);
-
-  const customerChartAnnotations = useMemo(() => {
-    if (!currentAssessment?.median_interval) return [];
-    return [
-      {
-        type: 'line' as const,
-        y: Math.round(currentAssessment.median_interval),
-        label: `평소 기준 ${Math.round(currentAssessment.median_interval)}일`,
-      },
-    ];
-  }, [currentAssessment]);
-
-  // ztd-charts data for Dashboard (Screen 2)
-  const dashboardGapChartData = useMemo(() => {
-    const targetAssessments = priorityList
-      .filter((a: Assessment) => a.status === 'high_risk' || a.status === 'risk' || a.status === 'attention')
-      .slice(0, 6);
-
-    return targetAssessments.map((a: Assessment) => ({
-      name: a.display_name,
-      gap_days: a.gap_days,
-    }));
-  }, [priorityList]);
-
-  const dashboardGapHighlight = useMemo(() => {
-    if (dashboardGapChartData.length > 0) {
-      return dashboardGapChartData[0].name;
-    }
-    return undefined;
-  }, [dashboardGapChartData]);
-
-  const dashboardStatusChartData = useMemo(() => {
-    return [
-      { label: '고위험 후보', value: summary.high_risk },
-      { label: '이탈 위험 후보', value: summary.risk },
-      { label: '관심 필요', value: summary.attention },
-      { label: '정상 관리', value: summary.normal },
-      { label: '판단 보류', value: summary.hold },
-    ].filter(d => d.value > 0);
-  }, [summary]);
-
-  const dashboardStatusHighlight = useMemo(() => {
-    if (summary.high_risk > 0) return '고위험 후보';
-    if (summary.risk > 0) return '이탈 위험 후보';
-    if (summary.attention > 0) return '관심 필요';
-    return '정상 관리';
-  }, [summary]);
-
   async function handleGenerateBriefing(forceLive: boolean = false) {
     setIsBriefingLoading(true);
     try {
-      const res = await generateBriefing(priorityList, summary, { demoMode, forceLive, apiKey });
+      const res = await generateBriefing(priorityList, summary, { demoMode, forceLive });
       setBriefing(res);
     } catch (e) {
       console.error(e);
@@ -374,12 +392,14 @@ export default function App() {
     }
   }
 
-  async function handleGenerateEmailDraft(forceLive: boolean = false) {
+  async function handleGenerateEmailDraft(forceLive: boolean = false, overrideTone?: MessageTone) {
     if (!currentAssessment) return;
+    const activeTone = overrideTone || tone;
     setIsGeneratingEmail(true);
     try {
-      const res = await generateEmail(currentAssessment, { demoMode, forceLive, apiKey });
+      const res = await generateEmail(currentAssessment, { demoMode, forceLive, tone: activeTone });
       const saved = saveDraft(currentAssessment.customer_key, 'email', res.source, res.content, refDate);
+      setStorageTick(t => t + 1);
       setCurrentEmailDraft(saved);
       setEmailSubject(renderPlaceholders(res.content.subject, currentAssessment.display_name, contactName));
       setEmailBody(renderPlaceholders(res.content.body, currentAssessment.display_name, contactName));
@@ -390,12 +410,14 @@ export default function App() {
     }
   }
 
-  async function handleGenerateCallGuide(forceLive: boolean = false) {
+  async function handleGenerateCallGuide(forceLive: boolean = false, overrideTone?: MessageTone) {
     if (!currentAssessment) return;
+    const activeTone = overrideTone || tone;
     setIsGeneratingCall(true);
     try {
-      const res = await generateCallGuide(currentAssessment, { demoMode, forceLive, apiKey });
+      const res = await generateCallGuide(currentAssessment, { demoMode, forceLive, tone: activeTone });
       const saved = saveDraft(currentAssessment.customer_key, 'call', res.source, res.content, refDate);
+      setStorageTick(t => t + 1);
       setCurrentCallDraft(saved);
     } catch (e) {
       console.error(e);
@@ -404,23 +426,122 @@ export default function App() {
     }
   }
 
+  function handleToneChange(nextTone: MessageTone) {
+    setTone(nextTone);
+    if (activeTab === 'email' && currentEmailDraft) {
+      handleGenerateEmailDraft(false, nextTone);
+    } else if (activeTab === 'call' && currentCallDraft) {
+      handleGenerateCallGuide(false, nextTone);
+    }
+  }
+
   function handleSaveEditedEmail() {
     if (!currentEmailDraft) return;
     updateDraftText(currentEmailDraft.id, emailBody);
-    setSaveDraftFeedback('수정본이 저장되었습니다.');
-    setTimeout(() => setSaveDraftFeedback(null), 3000);
+    setStorageTick(t => t + 1);
+    showToast('수정본을 저장했어요.');
   }
 
-  function handleCopyText(text: string, type: string) {
+  function handleCopyMessage(text: string) {
     navigator.clipboard.writeText(text);
-    setCopiedType(type);
-    setTimeout(() => setCopiedType(null), 2500);
+    showToast('문안을 복사했어요');
+  }
+
+  function handleQuickMarkContacted() {
+    if (!currentAssessment) return;
+    const created = addTouchpoint({
+      customer_key: currentAssessment.customer_key,
+      draft_id: currentEmailDraft?.id || currentCallDraft?.id || null,
+      contact_date: refDate,
+      channel: activeTab === 'email' ? 'email' : 'phone',
+      outcome: 'contacted',
+      note: '문안 편집기에서 연락 완료로 표시',
+      next_contact_date: null,
+    });
+    setStorageTick(t => t + 1);
+
+    const custName = currentAssessment.display_name;
+    showToast(`${custName} 연락 완료로 표시했어요.`, {
+      label: '실행 취소',
+      onUndo: () => {
+        deleteTouchpoint(created.id);
+        setStorageTick(t => t + 1);
+      },
+    });
+  }
+
+  function handleSaveTouchpoint(e: React.FormEvent) {
+    e.preventDefault();
+    if (!currentAssessment) return;
+    if (hasNextDate && nextContactDate && nextContactDate < touchDate) {
+      showToast('다음 연락일은 접촉 일자 이후로 선택해주세요.');
+      return;
+    }
+
+    const created = addTouchpoint({
+      customer_key: currentAssessment.customer_key,
+      draft_id: selectedDraftId,
+      contact_date: touchDate,
+      channel: touchChannel,
+      outcome: touchOutcome,
+      note: touchNote,
+      next_contact_date: hasNextDate ? nextContactDate : null,
+    });
+    setStorageTick(t => t + 1);
+    setTouchNote('');
+
+    showToast('접촉 기록을 저장했어요.', {
+      label: '실행 취소',
+      onUndo: () => {
+        deleteTouchpoint(created.id);
+        setStorageTick(t => t + 1);
+      },
+    });
+  }
+
+  function handleToggleFlags(customerKey: string, displayName: string, nextVip: boolean, nextProject: boolean) {
+    const prevFlag = flags[customerKey] || { vip: false, project_based: false };
+    const updated = setFlag(customerKey, displayName, nextVip, nextProject);
+    setFlagsState(updated);
+
+    if (nextProject !== prevFlag.project_based) {
+      showToast(
+        nextProject ? `${displayName}을(를) 보류/프로젝트성으로 바꿨어요.` : `${displayName}을(를) 정기 분석에 포함했어요.`,
+        {
+          label: '실행 취소',
+          onUndo: () => {
+            const reverted = setFlag(customerKey, displayName, prevFlag.vip, prevFlag.project_based);
+            setFlagsState(reverted);
+          },
+        }
+      );
+    }
+  }
+
+  function handleOpenCustomer(customerKey: string) {
+    setSelectedKey(customerKey);
+    setActiveNav('message');
+  }
+
+  function handleBulkCreateMessages(keys: string[]) {
+    if (keys.length === 0) return;
+    setBulkQueue(keys);
+    setSelectedKey(keys[0]);
+    setActiveNav('message');
+    showToast(`선택한 ${keys.length}곳의 문안 작성을 시작해요.`);
+  }
+
+  function handleNextCustomer() {
+    const queue = bulkQueue.length > 0 ? bulkQueue : priorityList.map(p => p.customer_key);
+    if (queue.length <= 1) return;
+    const idx = queue.indexOf(selectedKey);
+    const nextIdx = idx >= 0 ? (idx + 1) % queue.length : 0;
+    setSelectedKey(queue[nextIdx]);
   }
 
   function handleOpenMailApp() {
     if (!emailSubject && !emailBody) return;
-    const mailtoUrl = `mailto:?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-    window.location.href = mailtoUrl;
+    window.location.href = `mailto:?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
   }
 
   function handleOpenGmailWeb() {
@@ -434,10 +555,10 @@ export default function App() {
     for (const a of assessments) {
       const statusMap = {
         high_risk: '고위험 후보',
-        risk: '이탈 위험 후보',
+        risk: '연락 필요',
         attention: '관심 필요',
         normal: '정상 관리',
-        hold: '판단 보류',
+        hold: '보류/제외',
       };
       csv += `"${a.display_name}","${a.alias}","${statusMap[a.status] || a.status}","${a.vip ? 'Y' : 'N'}","${a.project_based ? 'Y' : 'N'}","${a.last_date}",${a.gap_days},${a.median_interval ? Math.round(a.median_interval) : ''},${a.ratio || ''},"${a.confidence || ''}",${a.txn_days},${a.avg_amount || ''}\n`;
     }
@@ -445,1877 +566,534 @@ export default function App() {
   }
 
   function handleExportTouchpointsCSV() {
-    const list = getFollowups(refDate, customerNameMap);
     let csv = '거래처명,접촉일자,채널,결과,다음연락예정일,상태,접촉메모\n';
-    for (const t of list) {
+    for (const t of followupsList) {
       const channelText = t.channel === 'email' ? '이메일' : t.channel === 'phone' ? '전화' : '기타';
-      const outcomeText = {
-        planned: '연락 예정',
-        contacted: '연락 완료',
-        waiting_reply: '회신 대기',
-        quote_requested: '견적 요청',
-        reorder_confirmed: '재주문 확인',
-        on_hold: '거래 보류',
-        not_needed: '연락 불필요',
-      }[t.outcome] || t.outcome;
-
+      const outcomeText =
+        {
+          planned: '연락 예정',
+          contacted: '연락 완료',
+          waiting_reply: '회신 대기',
+          quote_requested: '견적 요청',
+          reorder_confirmed: '재주문 확인',
+          on_hold: '거래 보류',
+          not_needed: '연락 불필요',
+        }[t.outcome] || t.outcome;
       csv += `"${t.display_name}","${t.contact_date}","${channelText}","${outcomeText}","${t.next_contact_date || ''}","${t.followup_status}","${(t.note || '').replace(/"/g, '""')}"\n`;
     }
     downloadCSV(`magentify_touchpoints_${refDate}.csv`, csv);
-  }
-
-  function handleSaveTouchpoint(e: React.FormEvent) {
-    e.preventDefault();
-    if (!currentAssessment) return;
-    if (hasNextDate && nextContactDate && nextContactDate < touchDate) {
-      alert('다음 연락일은 접촉 일자 이후여야 합니다.');
-      return;
-    }
-
-    addTouchpoint({
-      customer_key: currentAssessment.customer_key,
-      draft_id: selectedDraftId,
-      contact_date: touchDate,
-      channel: touchChannel,
-      outcome: touchOutcome,
-      note: touchNote,
-      next_contact_date: hasNextDate ? nextContactDate : null,
-    });
-
-    setTouchSuccessMsg(`접촉 기록이 성공적으로 저장되었습니다. (다음 연락일: ${hasNextDate && nextContactDate ? nextContactDate : '없음'})`);
-    setTouchNote('');
   }
 
   function handleResetDemo() {
     resetDemo();
     setRefDate('2026-11-30');
     setSetting('ref_date', '2026-11-30');
+    setWeeklyGoal(5);
+    setSetting('weekly_goal', '5');
     setFlagsState(getFlags());
     loadDemoData('2026-11-30');
     setBriefing(null);
-    setResetConfirmed(false);
-    setPage('dashboard');
+    setBulkQueue([]);
+    setStorageTick(t => t + 1);
+    setActiveNav('overview');
+    showToast('데모 데이터(126행) 상태로 초기화했어요.');
   }
 
+  const dueFollowupCount = followupsList.filter(f => f.followup_status === '후속 조치 필요').length;
+
   return (
-    <ThemeProvider theme="light" locale="ko-KR">
-      <div className="flex min-h-screen bg-slate-50 text-slate-800">
-      {/* ------------------------------------------------------------- */}
-      {/* SIDEBAR                                                       */}
-      {/* ------------------------------------------------------------- */}
-      <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0">
-        {/* Header / Flat Vector Brand Emblem */}
-        <div className="p-5 border-b border-slate-100">
-          <div className="flex items-center gap-3">
-            {/* Flat Vector Factory & Anomaly Emblem */}
-            <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-xs shrink-0">
-              <svg width="28" height="28" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="48" height="48" rx="10" fill="#2563EB" />
-                <path d="M14 34V20L24 14L34 20V34H14Z" fill="#93C5FD" />
-                <path d="M20 34V26H28V34H20Z" fill="#1D4ED8" />
-                <circle cx="34" cy="14" r="5" fill="#F59E0B" />
-                <path d="M34 11V17M31 14H37" stroke="#FFFFFF" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="font-extrabold text-slate-900 text-lg tracking-tight">Magentify Mini</h1>
-              <p className="text-xs text-slate-500 font-medium">제조업 거래 주기 & 이상 감지</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Sidebar Controls */}
-        <div className="p-5 flex-1 space-y-6 overflow-y-auto">
-          {/* LLM Status Badge */}
-          <div className="space-y-2">
-            {apiKey.trim() ? (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-emerald-800 text-xs font-bold">
-                    <span className="material-symbols-outlined text-emerald-600" style={{ fontSize: '18px' }}>check_circle</span>
-                    <span>Liner/Gemini API 연결됨</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setTempApiKey(apiKey);
-                      setShowKeyModal(true);
-                    }}
-                    className="text-[10px] text-emerald-700 underline font-semibold"
-                  >
-                    수정
-                  </button>
-                </div>
-                <div className="text-[11px] text-emerald-700 mt-1 pl-6">
-                  실시간 라이브 생성 활성화
-                </div>
-              </div>
-            ) : (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-amber-800 text-xs font-bold">
-                    <span className="material-symbols-outlined text-amber-600" style={{ fontSize: '18px' }}>info</span>
-                    <span>기본 템플릿 (폴백 모드)</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setTempApiKey('');
-                      setShowKeyModal(true);
-                    }}
-                    className="text-[10px] text-amber-800 underline font-bold"
-                  >
-                    키 등록
-                  </button>
-                </div>
-                <div className="text-[11px] text-amber-700 mt-1 pl-6">
-                  API 키 없이도 안전하게 검증 동작
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Reference Date Picker */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>calendar_today</span>
-              <span>분석 기준일</span>
-            </label>
-            <div className="relative">
-              <input
-                type="date"
-                value={refDate}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setRefDate(val);
-                  setSetting('ref_date', val);
-                }}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-            <p className="text-[11px] text-slate-400 mt-1">
-              기준일에 따라 거래처별 공백 일수와 배수가 재계산됩니다.
-            </p>
-          </div>
-
-          {/* Demo Mode Toggle */}
-          <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
-            <div>
-              <div className="text-xs font-bold text-slate-800 flex items-center gap-1">
-                <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>cached</span>
-                데모 모드
-              </div>
-              <div className="text-[11px] text-slate-500">응답 캐시 우선 활용</div>
-            </div>
+    <ThemeProvider theme={themeMode} locale="ko-KR" paint>
+      <div
+        className="min-h-screen flex flex-col"
+        style={{ backgroundColor: 'var(--app-canvas)', color: 'var(--ztd-ink)' }}
+      >
+        {/* ----------------------------------------------------------- */}
+        {/* TOP PILL NAVIGATION HEADER (§5)                             */}
+        {/* ----------------------------------------------------------- */}
+        <header className="sticky top-0 z-30 px-4 md:px-6 pt-4 pb-2">
+          <div className="max-w-[1280px] mx-auto flex items-center justify-between gap-3">
+            {/* Left Brand Logo */}
             <button
               type="button"
-              onClick={() => setDemoMode(!demoMode)}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                demoMode ? 'bg-blue-600' : 'bg-slate-300'
-              }`}
+              onClick={() => setActiveNav('overview')}
+              className="inline-flex items-center gap-2.5 h-[44px] px-3 rounded-full cursor-pointer transition-opacity hover:opacity-85 shrink-0"
+              aria-label="Magentify Mini 홈으로 이동"
             >
               <span
-                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                  demoMode ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
+                className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-[15px]"
+                style={{ backgroundColor: 'var(--ztd-ink)', color: 'var(--ztd-on-ink)' }}
+              >
+                M
+              </span>
+              <span className="font-bold text-[16px] tracking-tight hidden sm:inline" style={{ color: 'var(--ztd-ink)' }}>
+                Magentify Mini
+              </span>
             </button>
-          </div>
 
-          {/* Navigation Menu */}
-          <div>
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
-              화면 바로가기
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => setPage('dashboard')}
-                className={`flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg text-xs font-bold transition-colors ${
-                  page === 'dashboard'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>monitoring</span>
-                대시보드
-              </button>
-              <button
-                onClick={() => setPage('data')}
-                className={`flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-lg text-xs font-bold transition-colors ${
-                  page === 'data'
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>upload_file</span>
-                데이터 등록
-              </button>
-            </div>
-          </div>
-
-          {/* Demo Reset Section */}
-          <div className="pt-4 border-t border-slate-100">
-            <div className="text-xs font-bold text-slate-700 mb-2">시연 환경 관리</div>
-            <label className="flex items-center gap-2 text-xs text-slate-600 mb-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={resetConfirmed}
-                onChange={(e) => setResetConfirmed(e.target.checked)}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span>초기화 확인 (접촉·초안 삭제)</span>
-            </label>
-            <button
-              onClick={handleResetDemo}
-              disabled={!resetConfirmed}
-              className={`w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-bold transition-colors ${
-                resetConfirmed
-                  ? 'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100'
-                  : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
-              }`}
+            {/* Center Pill Nav */}
+            <nav
+              aria-label="주 메뉴"
+              className="hidden md:flex items-center p-1 rounded-full"
+              style={{ backgroundColor: 'var(--ztd-panel)', border: '1px solid var(--ztd-line)' }}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>restart_alt</span>
-              데모 리셋 (126행)
-            </button>
-          </div>
-        </div>
+              {NAV_ITEMS.map((item) => {
+                const active = activeNav === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setActiveNav(item.id)}
+                    aria-current={active ? 'page' : undefined}
+                    className="h-[38px] px-4 rounded-full text-[14px] font-semibold transition-colors cursor-pointer"
+                    style={{
+                      backgroundColor: active ? 'var(--ztd-ink)' : 'transparent',
+                      color: active ? 'var(--ztd-on-ink)' : 'var(--ztd-muted)',
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </nav>
 
-        {/* Footer info */}
-        <div className="p-4 border-t border-slate-100 text-[11px] text-slate-400 text-center">
-          Magentify Mini v1.2 · 로컬 에이전트
-        </div>
-      </aside>
+            {/* Right Utility Pills: Search · Notifications · Theme/Profile */}
+            <div className="flex items-center gap-2 relative shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setStatusFilter('all');
+                  setActiveNav('customers');
+                }}
+                aria-label="거래처 검색"
+                title="거래처 검색"
+                className="w-[44px] h-[44px] rounded-full flex items-center justify-center transition-colors cursor-pointer"
+                style={{ backgroundColor: 'var(--ztd-panel)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '20px' }} aria-hidden="true">
+                  search
+                </span>
+              </button>
 
-      {/* ------------------------------------------------------------- */}
-      {/* MAIN CONTENT AREA                                             */}
-      {/* ------------------------------------------------------------- */}
-      <main className="flex-1 overflow-y-auto p-8">
-        {/* ========================================================= */}
-        {/* SCREEN 1: DATA REGISTRATION                                */}
-        {/* ========================================================= */}
-        {page === 'data' && (
-          <div className="max-w-6xl mx-auto space-y-6">
-            {/* Header with Flat Vector Banner */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-              <div>
-                <div className="flex items-center gap-2 text-blue-600 font-bold text-xs uppercase tracking-wider mb-1">
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>folder_open</span>
-                  <span>거래 원장 수집 & 품질 필터링</span>
-                </div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
-                  거래 데이터 등록 및 5종 품질 검사
-                </h2>
-                <p className="text-sm text-slate-500 mt-1 max-w-xl">
-                  CSV 또는 엑셀(XLSX/XLS) 거래 원장을 업로드하면 컬럼 자동 인식 및 중복·취소·오류 데이터 무결성 검증을 즉시 실행합니다.
-                </p>
-              </div>
-
-              {/* Flat Vector Illustration: Data Processing & Blueprint */}
-              <div className="hidden md:block shrink-0">
-                <svg width="140" height="90" viewBox="0 0 140 90" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <rect x="15" y="10" width="110" height="70" rx="8" fill="#F1F5F9" stroke="#CBD5E1" strokeWidth="2" strokeDasharray="4 4" />
-                  <rect x="25" y="20" width="75" height="50" rx="6" fill="#FFFFFF" stroke="#94A3B8" strokeWidth="1.5" />
-                  <rect x="32" y="28" width="60" height="6" rx="2" fill="#E2E8F0" />
-                  <rect x="32" y="38" width="40" height="4" rx="2" fill="#E2E8F0" />
-                  <rect x="32" y="46" width="50" height="4" rx="2" fill="#E2E8F0" />
-                  <rect x="32" y="54" width="30" height="4" rx="2" fill="#E2E8F0" />
-                  <circle cx="95" cy="55" r="16" fill="#2563EB" />
-                  <path d="M90 55L94 59L101 51" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </div>
-            </div>
-
-            {/* Actions Grid: Demo Load + File Upload */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm mb-1 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-amber-500" style={{ fontSize: '20px' }}>auto_awesome</span>
-                    데모 원클릭 불러오기
-                  </h3>
-                  <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-                    12개 가상 거래처의 126행 거래 내역(정상 123행, 중복 1건, 음수 1건, 날짜오류 1건)을 한 번에 준비합니다.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    loadDemoData(refDate);
-                    alert('데모 거래 데이터(126행)를 불러왔습니다.');
-                  }}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-xs"
-                >
-                  <span className="material-symbols-outlined text-sm">download</span>
-                  <span>데모 파일 불러오기 (126행)</span>
-                </button>
-              </div>
-
-              <div className="md:col-span-2 bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-                <h3 className="font-bold text-slate-900 text-sm mb-1 flex items-center gap-1.5">
-                  <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '20px' }}>cloud_upload</span>
-                  새 원장 업로드 (CSV 또는 XLSX / XLS 지원)
-                </h3>
-                <p className="text-xs text-slate-500 mb-3">
-                  제조 거래 원장 엑셀 파일(`.xlsx`, `.xls`) 또는 `.csv` 파일을 드래그하여 바로 분석할 수 있습니다.
-                </p>
-                <label className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-xl p-5 flex flex-col items-center justify-center cursor-pointer bg-slate-50 hover:bg-blue-50/40 transition-colors">
-                  <span className="material-symbols-outlined text-slate-400 mb-1" style={{ fontSize: '28px' }}>upload_file</span>
-                  <span className="text-xs font-bold text-slate-700">파일 선택 (CSV 또는 XLSX 엑셀)</span>
-                  <span className="text-[11px] text-slate-400 mt-0.5">최대 5,000행 자동 파싱 지원</span>
-                  <input
-                    type="file"
-                    accept=".csv,.xlsx,.xls,.txt"
-                    onChange={handleFileUpload}
-                    className="hidden"
+              <button
+                type="button"
+                onClick={() => setShowNotifPopover(!showNotifPopover)}
+                aria-label="후속 조치 알림"
+                title="후속 조치 알림"
+                className="relative w-[44px] h-[44px] rounded-full flex items-center justify-center transition-colors cursor-pointer"
+                style={{ backgroundColor: 'var(--ztd-panel)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '20px' }} aria-hidden="true">
+                  notifications
+                </span>
+                {(dueFollowupCount > 0 || priorityList.length > 0) && (
+                  <span
+                    className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full"
+                    style={{ backgroundColor: 'var(--ztd-accent2)' }}
                   />
-                </label>
-              </div>
-            </div>
-
-            {/* Current Loaded File Details */}
-            {rawRows.length > 0 && (
-              <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-6">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                  <div className="flex items-center gap-4 text-xs font-semibold text-slate-600">
-                    <span className="bg-blue-50 text-blue-800 border border-blue-200 px-2.5 py-1 rounded-md font-mono font-bold flex items-center gap-1">
-                      <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '16px' }}>description</span>
-                      {fileName}
-                    </span>
-                    <span>총 행 수: <strong className="text-slate-900">{rawRows.length.toLocaleString()}행</strong></span>
-                    <span>열 수: <strong className="text-slate-900">{headers.length}개</strong></span>
-                  </div>
-                </div>
-
-                {/* Top 5 rows preview */}
-                <div>
-                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>table_view</span>
-                    원본 데이터 상위 5행 미리보기
-                  </h4>
-                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                    <table className="w-full text-left text-xs text-slate-700">
-                      <thead className="bg-slate-100 text-slate-600 border-b border-slate-200 font-bold">
-                        <tr>
-                          {headers.map(h => (
-                            <th key={h} className="px-4 py-2.5">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-mono">
-                        {rawRows.slice(0, 5).map((row, i) => (
-                          <tr key={i} className="hover:bg-slate-50">
-                            {headers.map(h => (
-                              <td key={h} className="px-4 py-2 font-sans">{row[h] || '-'}</td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Column Mapping Section */}
-                <div>
-                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2.5 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>tune</span>
-                    컬럼 자동 인식 및 매핑 확인
-                  </h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 mb-1">
-                        거래처 열 <span className="text-rose-500 font-normal">(필수)</span>
-                      </label>
-                      <select
-                        value={mapping.customer || ''}
-                        onChange={(e) => setMapping(prev => ({ ...prev, customer: e.target.value || null }))}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">(선택 안 됨)</option>
-                        {headers.map(h => (
-                          <option key={h} value={h}>{h}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-800 mb-1">
-                        거래일자 열 <span className="text-rose-500 font-normal">(필수)</span>
-                      </label>
-                      <select
-                        value={mapping.date || ''}
-                        onChange={(e) => setMapping(prev => ({ ...prev, date: e.target.value || null }))}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">(선택 안 됨)</option>
-                        {headers.map(h => (
-                          <option key={h} value={h}>{h}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        금액 열 (선택)
-                      </label>
-                      <select
-                        value={mapping.amount || ''}
-                        onChange={(e) => setMapping(prev => ({ ...prev, amount: e.target.value || null }))}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">(선택 안 됨)</option>
-                        {headers.map(h => (
-                          <option key={h} value={h}>{h}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        품목 열 (선택)
-                      </label>
-                      <select
-                        value={mapping.item || ''}
-                        onChange={(e) => setMapping(prev => ({ ...prev, item: e.target.value || null }))}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      >
-                        <option value="">(선택 안 됨)</option>
-                        {headers.map(h => (
-                          <option key={h} value={h}>{h}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quality Result Cards */}
-                {quality && (
-                  <div className="space-y-4 pt-3 border-t border-slate-100">
-                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
-                      <span className="material-symbols-outlined text-slate-500" style={{ fontSize: '16px' }}>verified</span>
-                      품질 검사 결과 (5종 검증)
-                    </h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                      <div className="metric-box" style={{ borderTop: '4px solid #10B981' }}>
-                        <div className="text-xs font-bold text-emerald-800">정상 거래</div>
-                        <div className="text-2xl font-black text-emerald-600 my-1">{quality.counts.ok}</div>
-                        <div className="text-[11px] text-emerald-700">분석 반영 행</div>
-                      </div>
-                      <div className="metric-box" style={{ borderTop: '4px solid #F59E0B' }}>
-                        <div className="text-xs font-bold text-amber-800">완전 중복</div>
-                        <div className="text-2xl font-black text-amber-600 my-1">{quality.counts.duplicate}</div>
-                        <div className="text-[11px] text-amber-700">첫 행만 유지</div>
-                      </div>
-                      <div className="metric-box" style={{ borderTop: '4px solid #EF4444' }}>
-                        <div className="text-xs font-bold text-rose-800">취소 후보 (음수)</div>
-                        <div className="text-2xl font-black text-rose-600 my-1">{quality.counts.negative}</div>
-                        <div className="text-[11px] text-rose-700">분석 제외</div>
-                      </div>
-                      <div className="metric-box" style={{ borderTop: '4px solid #6366F1' }}>
-                        <div className="text-xs font-bold text-indigo-800">날짜 변환 오류</div>
-                        <div className="text-2xl font-black text-indigo-600 my-1">{quality.counts.invalid}</div>
-                        <div className="text-[11px] text-indigo-700">분석 제외</div>
-                      </div>
-                      <div className="metric-box" style={{ borderTop: '4px solid #64748B' }}>
-                        <div className="text-xs font-bold text-slate-700">미래 날짜</div>
-                        <div className="text-2xl font-black text-slate-600 my-1">{quality.counts.future}</div>
-                        <div className="text-[11px] text-slate-500">분석 제외</div>
-                      </div>
-                    </div>
-
-                    {/* Excluded issues table */}
-                    {quality.issues.length > 0 && (
-                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                        <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1.5">
-                          <span className="material-symbols-outlined text-amber-500" style={{ fontSize: '18px' }}>warning</span>
-                          분석에서 제외된 행 목록 ({quality.issues.length}건)
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs text-slate-600">
-                            <thead className="bg-slate-200/60 font-bold text-slate-700">
-                              <tr>
-                                <th className="px-3 py-1.5">행 번호</th>
-                                <th className="px-3 py-1.5">거래처</th>
-                                <th className="px-3 py-1.5">거래일자</th>
-                                <th className="px-3 py-1.5">제외 사유</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/50">
-                              {quality.issues.map((iss, i) => (
-                                <tr key={i} className="hover:bg-slate-100">
-                                  <td className="px-3 py-1.5 font-mono">{iss.source_row}</td>
-                                  <td className="px-3 py-1.5 font-semibold text-slate-800">{iss.customer || '-'}</td>
-                                  <td className="px-3 py-1.5 font-mono">{iss.date || '-'}</td>
-                                  <td className="px-3 py-1.5 text-rose-600 font-medium">{iss.reason}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Similar names warning */}
-                    {quality.similar_pairs.length > 0 && (
-                      <div className="space-y-2">
-                        {quality.similar_pairs.map(([p1, p2], idx) => (
-                          <div key={idx} className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-900 flex items-center gap-2">
-                            <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '18px' }}>info</span>
-                            <span>
-                              유사 거래처명 감지: <strong>'{p1}'</strong> ↔ <strong>'{p2}'</strong> (원장 표기 차이일 수 있으나 원본 무결성을 위해 개별 분석을 진행합니다)
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
                 )}
+              </button>
 
-                {/* Execute Button */}
-                <div className="pt-2">
-                  <button
-                    onClick={handleExecuteAnalysis}
-                    disabled={!mapping.customer || !mapping.date}
-                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white font-extrabold text-sm py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition-colors shadow-xs"
-                  >
-                    <span className="material-symbols-outlined text-base">rocket_launch</span>
-                    <span>분석 실행 및 대시보드로 이동</span>
-                    <span className="material-symbols-outlined text-base">arrow_forward</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* SCREEN 2: DASHBOARD                                        */}
-        {/* ========================================================= */}
-        {page === 'dashboard' && (
-          <div className="max-w-6xl mx-auto space-y-6">
-            {/* Recency warning */}
-            {recencyWarning && (
-              <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-center gap-3 text-amber-900 text-xs">
-                <span className="material-symbols-outlined text-amber-600 shrink-0" style={{ fontSize: '20px' }}>warning</span>
-                <div>
-                  <strong>데이터가 오래되었습니다:</strong> 파일 내 최신 거래일(
-                  <span className="font-mono">{recencyWarning.maxDate}</span>)과 분석 기준일(
-                  <span className="font-mono">{refDate}</span>)의 차이가 {recencyWarning.diffDays}일입니다.
-                </div>
-              </div>
-            )}
-
-            {/* Top Dashboard Header with Flat Vector Graphic */}
-            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 text-blue-600 font-bold text-xs uppercase tracking-wider mb-1">
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>monitoring</span>
-                  <span>거래 간격 이상 감지 대시보드</span>
-                </div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
-                  거래처 주문 주기 & 이탈 위험 현황
-                </h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  분석 기준일: <strong className="text-slate-800 font-mono">{refDate}</strong> · 총 관리 거래처: <strong className="text-slate-800">{assessments.length}곳</strong>
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleExportAnalysisCSV}
-                  className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 px-3 py-2 rounded-lg transition-colors border border-slate-200 shadow-xs"
+              <button
+                type="button"
+                onClick={() => setThemeMode(themeMode === 'light' ? 'dark' : 'light')}
+                aria-label={themeMode === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'}
+                title={themeMode === 'light' ? '다크 모드로 전환' : '라이트 모드로 전환'}
+                className="h-[44px] pl-1.5 pr-3.5 rounded-full inline-flex items-center gap-2 transition-colors cursor-pointer"
+                style={{ backgroundColor: 'var(--ztd-panel)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
+              >
+                <span
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-[13px] font-bold"
+                  style={{ backgroundColor: 'var(--ztd-tint)', color: 'var(--ztd-accent-text)' }}
                 >
-                  <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '18px' }}>download</span>
-                  분석 결과 CSV 다운로드
-                </button>
-                <button
-                  onClick={() => setPage('data')}
-                  className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-2 rounded-lg transition-colors border border-blue-200"
+                  대표
+                </span>
+                <span className="material-symbols-outlined hidden sm:inline" style={{ fontSize: '18px', color: 'var(--ztd-muted)' }} aria-hidden="true">
+                  {themeMode === 'light' ? 'dark_mode' : 'light_mode'}
+                </span>
+              </button>
+
+              {/* Notifications Popover */}
+              {showNotifPopover && (
+                <div
+                  className="floating-surface absolute right-0 top-14 w-80 rounded-[18px] p-4 z-40 space-y-3"
+                  role="dialog"
+                  aria-label="연락 예정 알림"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>layers</span>
-                  데이터 다시 올리기
-                </button>
-              </div>
-            </div>
-
-            {/* 5 Summary Metric Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <div
-                onClick={() => setStatusFilter(statusFilter === 'normal' ? 'all' : 'normal')}
-                className={`metric-box cursor-pointer transition-all ${
-                  statusFilter === 'normal' ? 'ring-2 ring-emerald-500 border-emerald-500' : 'hover:border-slate-300'
-                }`}
-                style={{ borderTop: '4px solid #10B981' }}
-              >
-                <div className="text-xs font-bold text-slate-500">정상 관리</div>
-                <div className="text-3xl font-black text-emerald-600 my-1">{summary.normal}</div>
-                <div className="text-[11px] text-slate-400">정기 범위 (≤1.5배)</div>
-              </div>
-
-              <div
-                onClick={() => setStatusFilter(statusFilter === 'risk_only' ? 'all' : 'risk_only')}
-                className={`metric-box cursor-pointer transition-all ${
-                  statusFilter === 'risk_only' ? 'ring-2 ring-amber-500 border-amber-500' : 'hover:border-slate-300'
-                }`}
-                style={{ borderTop: '4px solid #F59E0B' }}
-              >
-                <div className="text-xs font-bold text-slate-500">관심 필요</div>
-                <div className="text-3xl font-black text-amber-600 my-1">{summary.attention}</div>
-                <div className="text-[11px] text-slate-400">흐름 확인 (1.5~2.0배)</div>
-              </div>
-
-              <div
-                onClick={() => setStatusFilter(statusFilter === 'risk_only' ? 'all' : 'risk_only')}
-                className={`metric-box cursor-pointer transition-all ${
-                  statusFilter === 'risk_only' ? 'ring-2 ring-rose-500 border-rose-500' : 'hover:border-slate-300'
-                }`}
-                style={{ borderTop: '4px solid #DC2626' }}
-              >
-                <div className="text-xs font-bold text-slate-500">이탈 위험 후보</div>
-                <div className="text-3xl font-black text-rose-600 my-1">{summary.risk}</div>
-                <div className="text-[11px] text-slate-400">우선 연락 (2.0~3.0배)</div>
-              </div>
-
-              <div
-                onClick={() => setStatusFilter(statusFilter === 'risk_only' ? 'all' : 'risk_only')}
-                className={`metric-box cursor-pointer transition-all ${
-                  statusFilter === 'risk_only' ? 'ring-2 ring-purple-600 border-purple-600' : 'hover:border-slate-300'
-                }`}
-                style={{ borderTop: '4px solid #7C3AED' }}
-              >
-                <div className="text-xs font-bold text-slate-500">고위험 후보</div>
-                <div className="text-3xl font-black text-purple-600 my-1">{summary.high_risk}</div>
-                <div className="text-[11px] text-slate-400">대표 직접 확인 (≥3.0배)</div>
-              </div>
-
-              <div
-                onClick={() => setStatusFilter(statusFilter === 'hold' ? 'all' : 'hold')}
-                className={`metric-box cursor-pointer transition-all ${
-                  statusFilter === 'hold' ? 'ring-2 ring-slate-500 border-slate-500' : 'hover:border-slate-300'
-                }`}
-                style={{ borderTop: '4px solid #64748B' }}
-              >
-                <div className="text-xs font-bold text-slate-500">판단 보류</div>
-                <div className="text-3xl font-black text-slate-600 my-1">{summary.hold}</div>
-                <div className="text-[11px] text-slate-400">데이터 부족/프로젝트성</div>
-              </div>
-            </div>
-
-            {/* Visual Analytics Overview with ztd-charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-              <div className="lg:col-span-7">
-                <ChartCard
-                  number="01"
-                  title="주요 거래처 주문 공백 비교"
-                  subtitle="우선 확인 및 이탈 위험 거래처의 최근 공백(일) 현황"
-                  takeaway={
-                    dashboardGapChartData.length > 0
-                      ? `${dashboardGapChartData[0].name}의 최근 공백이 ${dashboardGapChartData[0].gap_days}일로 가장 긴 지연 상태입니다.`
-                      : '모든 거래처가 안정적인 주기 내에 있습니다.'
-                  }
-                  accent="공백"
-                  level="basic"
-                  replay
-                >
-                  {dashboardGapChartData.length > 0 ? (
-                    <BarChart
-                      data={dashboardGapChartData}
-                      x="name"
-                      y="gap_days"
-                      highlight={dashboardGapHighlight}
-                      unit="일"
-                      locale="ko-KR"
-                      height={210}
-                      annotations={[
-                        {
-                          type: 'line',
-                          y: 30,
-                          label: '통상 주기 기준 (30일)',
-                        },
-                      ]}
-                    />
-                  ) : (
-                    <div className="h-52 flex items-center justify-center text-xs text-slate-400">
-                      표시할 이상 감지 거래처가 없습니다.
-                    </div>
-                  )}
-                </ChartCard>
-              </div>
-
-              <div className="lg:col-span-5">
-                <ChartCard
-                  number="02"
-                  title="거래처 관리 상태 분포"
-                  subtitle="주문 주기 이상 감지 기준 위험도 분류"
-                  takeaway={`총 ${assessments.length}곳 중 이탈 위험 및 고위험 ${summary.risk + summary.high_risk}곳 집중 조치 필요`}
-                  accent="분포"
-                  level="basic"
-                  replay
-                >
-                  <DonutChart
-                    data={dashboardStatusChartData}
-                    label="label"
-                    value="value"
-                    highlight={dashboardStatusHighlight}
-                    centerLabel="총 거래처"
-                    unit="곳"
-                    locale="ko-KR"
-                    height={210}
-                  />
-                </ChartCard>
-              </div>
-            </div>
-
-            {/* Weekly Briefing Card */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
-                    <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>article</span>
-                  </div>
-                  <h3 className="font-extrabold text-slate-900 text-base">이번 주 브리핑</h3>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleGenerateBriefing(false)}
-                    disabled={isBriefingLoading}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-3.5 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
-                  >
-                    <span className="material-symbols-outlined text-sm">auto_awesome</span>
-                    <span>{isBriefingLoading ? '작성 중...' : '이번 주 브리핑 생성'}</span>
-                  </button>
-                  <button
-                    onClick={() => handleGenerateBriefing(true)}
-                    disabled={isBriefingLoading}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
-                  >
-                    <span className="material-symbols-outlined text-sm">sync</span>
-                    <span>새로 생성 (Live)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Briefing Content Display */}
-              {briefing ? (
-                <div className="border-l-4 border-blue-600 pl-4 py-1 space-y-3">
                   <div className="flex items-center justify-between">
-                    <h4 className="font-bold text-slate-900 text-sm">{briefing.content.headline}</h4>
-                    <span className="source-tag">
-                      <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '16px' }}>bolt</span>
-                      {briefing.source === 'live'
-                        ? `Liner/Gemini API 응답 (${briefing.latency_ms || 500}ms)`
-                        : briefing.source === 'cache'
-                        ? 'Liner Model API 응답(저장본)'
-                        : '기본 템플릿(폴백)'}
+                    <span className="text-[14px] font-semibold" style={{ color: 'var(--ztd-ink)' }}>
+                      오늘의 연락 알림
                     </span>
-                  </div>
-
-                  <div className="space-y-2">
-                    {briefing.content.items.map((item, idx) => {
-                      const cust = assessments.find(a => a.alias === item.id);
-                      const dispName = cust ? cust.display_name : item.id;
-                      return (
-                        <div key={idx} className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="font-extrabold text-slate-900">{dispName}</span>
-                              <span className="text-[10px] font-mono bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded">
-                                {item.id}
-                              </span>
-                            </div>
-                            <div className="text-slate-600 mt-1">{item.reason}</div>
-                          </div>
-                          <div className="shrink-0 flex items-center gap-1.5">
-                            <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold px-2 py-0.5 rounded text-[11px]">
-                              {item.action === 'email' ? '✉️ 이메일 권장' : '📞 통화 권장'}
-                            </span>
-                            <span className="bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded text-[11px]">
-                              {item.tone}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {briefing.content.caution && (
-                    <div className="text-[11px] text-slate-400 pt-2 border-t border-dashed border-slate-200 flex items-center gap-1.5">
-                      <span className="material-symbols-outlined text-slate-400 shrink-0" style={{ fontSize: '16px' }}>info</span>
-                      <span>{briefing.content.caution}</span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 text-center text-xs text-slate-500">
-                  위 <strong className="text-slate-700">"이번 주 브리핑 생성"</strong> 버튼을 누르면 Liner Model API가 거래 패턴 데이터를 종합하여 이번 주 우선 연락 대상과 안부 전략을 1페이지 브리핑으로 정리합니다.
-                </div>
-              )}
-            </div>
-
-            {/* Filter and Search Bar */}
-            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                {/* Search input */}
-                <div className="relative flex-1 max-w-sm">
-                  <span className="material-symbols-outlined text-slate-400 absolute left-3 top-2" style={{ fontSize: '18px' }}>search</span>
-                  <input
-                    type="text"
-                    placeholder="거래처명 또는 식별자(C01...) 검색"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-8 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  {searchQuery && (
                     <button
-                      onClick={() => setSearchQuery('')}
-                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                      type="button"
+                      onClick={() => setShowNotifPopover(false)}
+                      aria-label="알림 닫기"
+                      className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--ztd-lift)] cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-sm">close</span>
+                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
                     </button>
-                  )}
-                </div>
-
-                {/* Filter pills */}
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <span className="text-slate-400 mr-1 text-[11px] flex items-center gap-1">
-                    <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>filter_alt</span> 필터:
-                  </span>
-                  <button
-                    onClick={() => setStatusFilter('all')}
-                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                      statusFilter === 'all'
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                    }`}
-                  >
-                    전체 ({assessments.length})
-                  </button>
-                  <button
-                    onClick={() => setStatusFilter('priority')}
-                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                      statusFilter === 'priority'
-                        ? 'bg-rose-600 text-white'
-                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200'
-                    }`}
-                  >
-                    우선 확인 ({priorityList.length})
-                  </button>
-                  <button
-                    onClick={() => setStatusFilter('risk_only')}
-                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                      statusFilter === 'risk_only'
-                        ? 'bg-purple-600 text-white'
-                        : 'bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200'
-                    }`}
-                  >
-                    이탈위험 ({summary.risk + summary.high_risk})
-                  </button>
-                  <button
-                    onClick={() => setStatusFilter('vip')}
-                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                      statusFilter === 'vip'
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200'
-                    }`}
-                  >
-                    VIP만 보기
-                  </button>
-                  <button
-                    onClick={() => setStatusFilter('normal')}
-                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
-                      statusFilter === 'normal'
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200'
-                    }`}
-                  >
-                    정상 ({summary.normal})
-                  </button>
-                </div>
-              </div>
-
-              {/* Priority & Filtered Accounts Table */}
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
-                    <tr>
-                      <th className="px-3.5 py-2.5 text-center w-12 whitespace-nowrap">순위</th>
-                      <th className="px-4 py-2.5 whitespace-nowrap">거래처</th>
-                      <th className="px-3.5 py-2.5 whitespace-nowrap">상태</th>
-                      <th className="px-3.5 py-2.5 font-mono whitespace-nowrap">최근 거래일</th>
-                      <th className="px-3.5 py-2.5 font-mono whitespace-nowrap">공백</th>
-                      <th className="px-3.5 py-2.5 font-mono whitespace-nowrap">평소 간격</th>
-                      <th className="px-3.5 py-2.5 font-mono whitespace-nowrap">배수</th>
-                      <th className="px-3.5 py-2.5 whitespace-nowrap">신뢰도</th>
-                      <th className="px-4 py-2.5 text-center w-36 min-w-[120px] whitespace-nowrap">조치</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {displayedAssessments.map((a, idx) => (
-                      <tr key={a.customer_key} className="hover:bg-slate-50 transition-colors">
-                        <td className="px-3.5 py-3 text-center font-bold text-slate-400 whitespace-nowrap">
-                          {idx + 1}
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-slate-900 text-sm whitespace-nowrap">{a.display_name}</span>
-                            {a.vip && (
-                              <span className="badge-vip whitespace-nowrap">
-                                <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>star</span>
-                                VIP
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3.5 py-3 whitespace-nowrap">
-                          {a.status === 'high_risk' && (
-                            <span className="badge-high-risk whitespace-nowrap">
-                              고위험 후보
-                            </span>
-                          )}
-                          {a.status === 'risk' && (
-                            <span className="badge-risk whitespace-nowrap">
-                              이탈 위험 후보
-                            </span>
-                          )}
-                          {a.status === 'attention' && (
-                            <span className="badge-attention whitespace-nowrap">
-                              관심 필요
-                            </span>
-                          )}
-                          {a.status === 'normal' && (
-                            <span className="badge-normal whitespace-nowrap">
-                              정상 관리
-                            </span>
-                          )}
-                          {a.status === 'hold' && (
-                            <span className="badge-hold whitespace-nowrap">
-                              판단 보류
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3.5 py-3 font-mono text-slate-600 whitespace-nowrap">
-                          {a.last_date}
-                        </td>
-                        <td className="px-3.5 py-3 font-mono text-rose-600 font-bold whitespace-nowrap">
-                          {a.gap_days}일
-                        </td>
-                        <td className="px-3.5 py-3 font-mono text-slate-600 whitespace-nowrap">
-                          {a.median_interval ? `${Math.round(a.median_interval)}일` : '-'}
-                        </td>
-                        <td className="px-3.5 py-3 font-mono font-black text-slate-900 whitespace-nowrap">
-                          {a.ratio ? `${a.ratio}배` : '-'}
-                        </td>
-                        <td className="px-3.5 py-3 text-slate-600 whitespace-nowrap">
-                          {a.confidence === 'high' ? '높음' : a.confidence === 'medium' ? '보통' : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-center whitespace-nowrap">
-                          <button
-                            onClick={() => {
-                              setSelectedKey(a.customer_key);
-                              setPage('customer');
-                            }}
-                            className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-1.5 px-3.5 rounded-lg inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors shadow-xs min-w-[96px]"
-                          >
-                            <span className="whitespace-nowrap">문안 준비</span>
-                            <span className="material-symbols-outlined shrink-0" style={{ fontSize: '15px' }}>arrow_forward</span>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Follow-up Schedule Table */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                  <span className="material-symbols-outlined text-sky-600" style={{ fontSize: '20px' }}>event_upcoming</span>
-                  후속 조치 예정 현황
-                </h3>
-                {followupsList.length > 0 && (
-                  <button
-                    onClick={handleExportTouchpointsCSV}
-                    className="text-xs text-slate-600 hover:text-slate-900 font-semibold flex items-center gap-1"
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>download</span>
-                    CSV 내보내기
-                  </button>
-                )}
-              </div>
-
-              {followupsList.length === 0 ? (
-                <div className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-5 text-center">
-                  현재 등록된 후속 조치 일정이 없습니다. 거래처 상세 화면에서 접촉 기록 및 다음 연락일을 등록하세요.
-                </div>
-              ) : (
-                <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
-                      <tr>
-                        <th className="px-4 py-2.5">거래처</th>
-                        <th className="px-3.5 py-2.5">상태</th>
-                        <th className="px-3.5 py-2.5 font-mono">다음 연락일</th>
-                        <th className="px-3.5 py-2.5">최근 접촉</th>
-                        <th className="px-4 py-2.5">메모</th>
-                        <th className="px-4 py-2.5 text-center w-24">바로가기</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {followupsList.map(fu => {
-                        const channelText = fu.channel === 'email' ? '이메일' : fu.channel === 'phone' ? '전화' : '기타';
-                        const outcomeText = {
-                          planned: '연락 예정',
-                          contacted: '연락 완료',
-                          waiting_reply: '회신 대기',
-                          quote_requested: '견적 요청',
-                          reorder_confirmed: '재주문 확인',
-                          on_hold: '거래 보류',
-                          not_needed: '연락 불필요',
-                        }[fu.outcome] || fu.outcome;
-
-                        return (
-                          <tr key={fu.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="px-4 py-3 font-bold text-slate-900">
-                              {fu.display_name}
-                            </td>
-                            <td className="px-3.5 py-3">
-                              {fu.followup_status === '후속 조치 필요' ? (
-                                <span className="bg-rose-100 text-rose-800 font-bold px-2 py-0.5 rounded text-[11px]">
-                                  후속 조치 필요
-                                </span>
-                              ) : (
-                                <span className="bg-sky-100 text-sky-800 font-bold px-2 py-0.5 rounded text-[11px]">
-                                  예정
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3.5 py-3 font-mono font-bold text-slate-900">
+                  </div>
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {followupsList.length === 0 ? (
+                      <p className="text-[14px] py-3 text-center" style={{ color: 'var(--ztd-muted)' }}>
+                        예정된 후속 연락 일정이 없어요.
+                      </p>
+                    ) : (
+                      followupsList.slice(0, 4).map((fu) => (
+                        <button
+                          key={fu.id}
+                          type="button"
+                          onClick={() => {
+                            setShowNotifPopover(false);
+                            handleOpenCustomer(fu.customer_key);
+                          }}
+                          className="w-full text-left bento-sub p-3 hover:brightness-97 transition-all cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between text-[14px] font-semibold" style={{ color: 'var(--ztd-ink)' }}>
+                            <span>{fu.display_name}</span>
+                            <span className="font-mono text-[13px]" style={{ color: 'var(--ztd-accent-text)' }}>
                               {fu.next_contact_date}
-                            </td>
-                            <td className="px-3.5 py-3 text-slate-600">
-                              {channelText} / {outcomeText}
-                            </td>
-                            <td className="px-4 py-3 text-slate-500 max-w-xs truncate">
-                              {fu.note || '-'}
-                            </td>
-                            <td className="px-4 py-3 text-center">
-                              <button
-                                onClick={() => {
-                                  setSelectedKey(fu.customer_key);
-                                  setPage('customer');
-                                }}
-                                className="text-blue-600 hover:text-blue-800 font-bold text-xs hover:underline"
-                              >
-                                상세 보기
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================= */}
-        {/* SCREEN 3: CUSTOMER DETAIL & MESSAGE PREPARATION           */}
-        {/* ========================================================= */}
-        {page === 'customer' && currentAssessment && (
-          <div className="max-w-6xl mx-auto space-y-6">
-            {/* Top Selector & Navigation */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-200 gap-4">
-              <div className="flex-1 max-w-md">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>apartment</span>
-                  분석할 거래처 선택 ({assessments.length}곳 중 선택)
-                </label>
-                <select
-                  value={selectedKey}
-                  onChange={(e) => setSelectedKey(e.target.value)}
-                  className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-blue-500 shadow-xs"
-                >
-                  {assessments.map(a => (
-                    <option key={a.customer_key} value={a.customer_key}>
-                      {a.display_name} {a.vip ? '(VIP) ' : ''}[{a.status}]
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button
-                onClick={() => setPage('dashboard')}
-                className="inline-flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-4 rounded-xl transition-colors border border-slate-200"
-              >
-                <span className="material-symbols-outlined text-sm">arrow_back</span>
-                대시보드로 돌아가기
-              </button>
-            </div>
-
-            {/* Customer Title & Flags */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2.5">
-                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">
-                    {currentAssessment.display_name}
-                  </h2>
-                  {currentAssessment.vip && (
-                    <span className="badge-vip">
-                      <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>star</span>
-                      VIP 거래처
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-4 mt-3">
-                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={currentAssessment.vip}
-                      onChange={(e) => {
-                        const updated = setFlag(
-                          currentAssessment.customer_key,
-                          currentAssessment.display_name,
-                          e.target.checked,
-                          currentAssessment.project_based
-                        );
-                        setFlagsState(updated);
-                      }}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span>VIP 거래처 지정</span>
-                  </label>
-
-                  <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={currentAssessment.project_based}
-                      onChange={(e) => {
-                        const updated = setFlag(
-                          currentAssessment.customer_key,
-                          currentAssessment.display_name,
-                          currentAssessment.vip,
-                          e.target.checked
-                        );
-                        setFlagsState(updated);
-                      }}
-                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span>비정기 프로젝트성 거래처</span>
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                {currentAssessment.status === 'high_risk' && (
-                  <span className="badge-high-risk" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
-                    🚨 고위험 후보
-                  </span>
-                )}
-                {currentAssessment.status === 'risk' && (
-                  <span className="badge-risk" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
-                    ⚠️ 이탈 위험 후보
-                  </span>
-                )}
-                {currentAssessment.status === 'attention' && (
-                  <span className="badge-attention" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
-                    👀 관심 필요
-                  </span>
-                )}
-                {currentAssessment.status === 'normal' && (
-                  <span className="badge-normal" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
-                    ✅ 정상 관리
-                  </span>
-                )}
-                {currentAssessment.status === 'hold' && (
-                  <span className="badge-hold" style={{ fontSize: '0.95rem', padding: '6px 14px' }}>
-                    ⏸️ 판단 보류
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* 5 Numerical Metric Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              <div className="metric-box">
-                <div className="text-xs font-bold text-slate-500">최근 거래일</div>
-                <div className="text-base font-extrabold text-slate-800 font-mono my-1">
-                  {currentAssessment.last_date}
-                </div>
-                <div className="text-[11px] text-slate-400">최근 발주 일자</div>
-              </div>
-
-              <div className="metric-box">
-                <div className="text-xs font-bold text-slate-500">공백 일수</div>
-                <div className="text-2xl font-black text-rose-600 font-mono my-1">
-                  {currentAssessment.gap_days}일
-                </div>
-                <div className="text-[11px] text-slate-400">기준일 대비 경과</div>
-              </div>
-
-              <div className="metric-box">
-                <div className="text-xs font-bold text-slate-500">평소 주문 주기</div>
-                <div className="text-2xl font-black text-slate-800 font-mono my-1">
-                  {currentAssessment.median_interval ? `${Math.round(currentAssessment.median_interval)}일` : '-'}
-                </div>
-                <div className="text-[11px] text-slate-400">간격 중앙값</div>
-              </div>
-
-              <div className="metric-box">
-                <div className="text-xs font-bold text-slate-500">주기 대비 배수</div>
-                <div className="text-2xl font-black text-purple-600 font-mono my-1">
-                  {currentAssessment.ratio ? `${currentAssessment.ratio}배` : '-'}
-                </div>
-                <div className="text-[11px] text-slate-400">공백 / 평소 간격</div>
-              </div>
-
-              <div className="metric-box">
-                <div className="text-xs font-bold text-slate-500">분석 신뢰도</div>
-                <div className="text-base font-extrabold text-blue-600 my-1">
-                  {currentAssessment.confidence === 'high'
-                    ? '높음 (10회+)'
-                    : currentAssessment.confidence === 'medium'
-                    ? '보통 (5~9회)'
-                    : '부족'}
-                </div>
-                <div className="text-[11px] text-slate-400">총 거래일 수 {currentAssessment.txn_days}일</div>
-              </div>
-            </div>
-
-            {/* Questions Box & Warning Statement */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-              <div className="font-bold text-slate-900 text-xs mb-2 flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '18px' }}>checklist</span>
-                대표 확인 질문 (연락 전 점검사항)
-              </div>
-              <ul className="list-disc list-inside text-xs text-slate-600 space-y-1 pl-1">
-                {currentAssessment.questions.map((q, idx) => (
-                  <li key={idx}>{q}</li>
-                ))}
-              </ul>
-              <div className="mt-3 pt-2.5 border-t border-dashed border-slate-300 text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-amber-600 shrink-0" style={{ fontSize: '16px' }}>warning</span>
-                거래 이력만으로 이탈을 확정할 수 없습니다.
-              </div>
-            </div>
-
-            {/* Interval History Visual (ztd-charts) & Recent 10 Transactions */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
-              <div className="lg:col-span-7">
-                <ChartCard
-                  number="01"
-                  title="주문 간격 이력 및 최근 공백 분석"
-                  subtitle="과거 주문 주기 추이와 기준일 대비 발생한 최근 공백 비교"
-                  takeaway={
-                    currentAssessment.ratio
-                      ? `평소 ${Math.round(currentAssessment.median_interval || 0)}일 주기 대비 최근 공백 ${currentAssessment.gap_days}일로 ${currentAssessment.ratio}배 지연`
-                      : `평소 간격 ${Math.round(currentAssessment.median_interval || 0)}일 수준 유지 중`
-                  }
-                  accent="공백"
-                  level="basic"
-                  replay
-                >
-                  {customerIntervalChartData.length > 0 ? (
-                    <BarChart
-                      data={customerIntervalChartData}
-                      x="label"
-                      y="days"
-                      highlight="최근 공백"
-                      unit="일"
-                      locale="ko-KR"
-                      height={210}
-                      annotations={customerChartAnnotations}
-                    />
-                  ) : (
-                    <div className="h-52 flex items-center justify-center text-xs text-slate-400">
-                      거래일 수가 부족하여 간격 차트를 표시할 수 없습니다.
-                    </div>
-                  )}
-                </ChartCard>
-              </div>
-
-              <div className="lg:col-span-5 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between">
-                <div>
-                  <h4 className="font-bold text-slate-900 text-xs mb-3 flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-slate-600" style={{ fontSize: '18px' }}>schedule</span>
-                    최근 거래 내역 (최대 10건)
-                  </h4>
-                  <div className="overflow-x-auto border border-slate-200 rounded-lg max-h-56">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-100 text-slate-600 font-bold sticky top-0 border-b border-slate-200">
-                        <tr>
-                          <th className="px-3 py-2">거래일</th>
-                          <th className="px-3 py-2">금액</th>
-                          <th className="px-3 py-2">품목</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-                        {cleanRows
-                          .filter(r => r.customer_key === currentAssessment.customer_key)
-                          .slice(0, 10)
-                          .map((r, i) => (
-                            <tr key={i} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-3 py-1.5 text-slate-700 whitespace-nowrap">{r.date}</td>
-                              <td className="px-3 py-1.5 font-sans font-medium text-slate-800 whitespace-nowrap">
-                                {r.amount ? `₩${r.amount.toLocaleString()}` : '-'}
-                              </td>
-                              <td className="px-3 py-1.5 font-sans text-slate-600 truncate max-w-[120px]">{r.item || '-'}</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                  <span>총 거래일 수: {currentAssessment.txn_days}일</span>
-                  <span>최종 거래일: {currentAssessment.last_date}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Message Preparation Tabs (Email Draft & Call Guide) */}
-            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                  <span className="material-symbols-outlined text-blue-600" style={{ fontSize: '20px' }}>edit_note</span>
-                  맞춤형 연락 문안 준비 (발송은 사용자가 직접 수행)
-                </h3>
-              </div>
-
-              {/* Tabs selector */}
-              <div className="flex border-b border-slate-200">
-                <button
-                  onClick={() => setActiveTab('email')}
-                  className={`flex items-center gap-1.5 px-5 py-2.5 text-xs font-bold border-b-2 transition-colors ${
-                    activeTab === 'email'
-                      ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>send</span>
-                  이메일 초안
-                </button>
-                <button
-                  onClick={() => setActiveTab('call')}
-                  className={`flex items-center gap-1.5 px-5 py-2.5 text-xs font-bold border-b-2 transition-colors ${
-                    activeTab === 'call'
-                      ? 'border-blue-600 text-blue-600'
-                      : 'border-transparent text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>call</span>
-                  통화 가이드
-                </button>
-              </div>
-
-              {/* TAB 1: EMAIL DRAFT */}
-              {activeTab === 'email' && (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        담당자명 (선택)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="예: 김철수 과장 (비워둘 시 [담당자명] 유지)"
-                        value={contactName}
-                        onChange={(e) => setContactName(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleGenerateEmailDraft(false)}
-                        disabled={isGeneratingEmail}
-                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-xs"
-                      >
-                        <span className="material-symbols-outlined text-sm">auto_awesome</span>
-                        <span>{isGeneratingEmail ? '작성 중...' : '이메일 초안 생성'}</span>
-                      </button>
-
-                      <button
-                        onClick={() => handleGenerateEmailDraft(true)}
-                        disabled={isGeneratingEmail}
-                        className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors border border-slate-200"
-                      >
-                        <span className="material-symbols-outlined text-sm">sync</span>
-                        <span>Live</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {currentEmailDraft && (
-                    <div className="space-y-4 pt-2">
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="bg-blue-100 text-blue-800 font-extrabold px-2.5 py-0.5 rounded-md">
-                          AI 초안
-                        </span>
-                        <span className="source-tag">
-                          {currentEmailDraft.source === 'live'
-                            ? 'Liner/Gemini API 응답'
-                            : currentEmailDraft.source === 'cache'
-                            ? 'Liner Model API 응답(저장본)'
-                            : '기본 템플릿(폴백)'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          메일 제목
-                        </label>
-                        <input
-                          type="text"
-                          value={emailSubject}
-                          onChange={(e) => setEmailSubject(e.target.value)}
-                          className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-900 focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          메일 본문 (수정 가능)
-                        </label>
-                        <textarea
-                          rows={6}
-                          value={emailBody}
-                          onChange={(e) => setEmailBody(e.target.value)}
-                          className="w-full bg-white border border-slate-300 rounded-lg p-3 text-xs text-slate-800 leading-relaxed font-sans focus:ring-2 focus:ring-blue-500"
-                        />
-                      </div>
-
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleSaveEditedEmail}
-                            className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs py-2 px-4 rounded-lg flex items-center gap-1.5 transition-colors"
-                          >
-                            <span className="material-symbols-outlined text-sm">save</span>
-                            <span>수정본 저장</span>
-                          </button>
-                          {saveDraftFeedback && (
-                            <span className="text-xs text-emerald-600 font-bold">
-                              {saveDraftFeedback}
                             </span>
-                          )}
-                        </div>
-
-                        {/* Mailto & Gmail Quick Actions */}
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={handleOpenMailApp}
-                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
-                            title="기본 메일 클라이언트(Outlook 등)로 새 메일 열기"
-                          >
-                            <span className="material-symbols-outlined text-blue-600 text-sm">mail</span>
-                            <span>기본 메일 앱 열기</span>
-                          </button>
-                          <button
-                            onClick={handleOpenGmailWeb}
-                            className="bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs py-2 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-red-200"
-                            title="웹 브라우저에서 Gmail 작성창 바로 열기"
-                          >
-                            <span className="material-symbols-outlined text-sm">open_in_new</span>
-                            <span>Gmail 웹으로 열기</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* One click copy box */}
-                      <div className="bg-slate-900 text-slate-100 rounded-xl p-4 relative font-mono text-xs">
-                        <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800 text-[11px] text-slate-400">
-                          <span>원클릭 복사 영역 (메일 프로그램에 붙여넣기)</span>
-                          <button
-                            onClick={() => handleCopyText(`제목: ${emailSubject}\n\n${emailBody}`, 'email')}
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors"
-                          >
-                            {copiedType === 'email' ? (
-                              <>
-                                <span className="material-symbols-outlined text-emerald-400 text-sm">check</span>
-                                <span className="text-emerald-400">복사 완료!</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="material-symbols-outlined text-sm">content_copy</span>
-                                <span>본문 복사</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        <div className="whitespace-pre-wrap leading-relaxed text-slate-200 font-sans">
-                          <strong className="text-white font-mono">제목:</strong> {emailSubject}
-                          {'\n\n'}
-                          {emailBody}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* TAB 2: CALL GUIDE */}
-              {activeTab === 'call' && (
-                <div className="space-y-4">
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleGenerateCallGuide(false)}
-                      disabled={isGeneratingCall}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2.5 px-4 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs"
-                    >
-                      <span className="material-symbols-outlined text-sm">auto_awesome</span>
-                      <span>{isGeneratingCall ? '작성 중...' : '통화 가이드 생성'}</span>
-                    </button>
-
-                    <button
-                      onClick={() => handleGenerateCallGuide(true)}
-                      disabled={isGeneratingCall}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-2.5 px-3 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
-                    >
-                      <span className="material-symbols-outlined text-sm">sync</span>
-                      <span>Live</span>
-                    </button>
-                  </div>
-
-                  {currentCallDraft && (
-                    <div className="space-y-4 pt-2">
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="bg-blue-100 text-blue-800 font-extrabold px-2.5 py-0.5 rounded-md">
-                          AI 초안
-                        </span>
-                        <span className="source-tag">
-                          {currentCallDraft.source === 'live'
-                            ? 'Liner/Gemini API 응답'
-                            : currentCallDraft.source === 'cache'
-                            ? 'Liner Model API 응답(저장본)'
-                            : '기본 템플릿(폴백)'}
-                        </span>
-                      </div>
-
-                      <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 space-y-4 text-xs">
-                        <div>
-                          <div className="font-bold text-slate-900 mb-1">🎯 통화 목적</div>
-                          <div className="text-slate-600">
-                            {renderPlaceholders(currentCallDraft.original_json?.purpose || '', currentAssessment.display_name)}
                           </div>
-                        </div>
-
-                        <div>
-                          <div className="font-bold text-slate-900 mb-1">👋 첫 인사 가이드</div>
-                          <div className="bg-white border border-slate-200 rounded-lg p-3 text-slate-800 italic">
-                            "{renderPlaceholders(currentCallDraft.original_json?.opening || '', currentAssessment.display_name)}"
+                          <div className="text-[13px] mt-0.5 truncate" style={{ color: 'var(--ztd-muted)' }}>
+                            {fu.followup_status} · {fu.note || '후속 연락 확인'}
                           </div>
-                        </div>
-
-                        <div>
-                          <div className="font-bold text-slate-900 mb-1">❓ 주요 확인 질문</div>
-                          <ul className="list-disc list-inside text-slate-600 space-y-1 pl-1">
-                            {(currentCallDraft.original_json?.questions || []).map((q: string, idx: number) => (
-                              <li key={idx}>{renderPlaceholders(q, currentAssessment.display_name)}</li>
-                            ))}
-                          </ul>
-                        </div>
-
-                        <div>
-                          <div className="font-bold text-slate-900 mb-1">➡️ 다음 단계 제안</div>
-                          <div className="text-slate-600">
-                            {renderPlaceholders(currentCallDraft.original_json?.next_step || '', currentAssessment.display_name)}
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="font-bold text-slate-900 mb-1">📝 통화 후 기록 체크리스트</div>
-                          <ul className="list-disc list-inside text-slate-500 space-y-1 pl-1">
-                            {(currentCallDraft.original_json?.after_call || []).map((it: string, idx: number) => (
-                              <li key={idx}>{it}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-
-                      <div className="bg-slate-900 text-slate-100 rounded-xl p-4 relative font-mono text-xs">
-                        <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800 text-[11px] text-slate-400">
-                          <span>통화 요약 가이드 복사</span>
-                          <button
-                            onClick={() => {
-                              const callText = `목적: ${currentCallDraft.original_json?.purpose}\n첫인사: ${currentCallDraft.original_json?.opening}\n질문: ${(currentCallDraft.original_json?.questions || []).join(', ')}\n다음단계: ${currentCallDraft.original_json?.next_step}`;
-                              handleCopyText(callText, 'call');
-                            }}
-                            className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold px-2.5 py-1 rounded flex items-center gap-1.5 transition-colors"
-                          >
-                            {copiedType === 'call' ? (
-                              <>
-                                <span className="material-symbols-outlined text-emerald-400 text-sm">check</span>
-                                <span className="text-emerald-400">복사 완료!</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="material-symbols-outlined text-sm">content_copy</span>
-                                <span>가이드 복사</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        <div className="whitespace-pre-wrap font-sans text-slate-300">
-                          <strong>첫인사:</strong> "{renderPlaceholders(currentCallDraft.original_json?.opening || '', currentAssessment.display_name)}"
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Contact Record Form */}
-            <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs space-y-4">
-              <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                <span className="material-symbols-outlined text-emerald-600" style={{ fontSize: '20px' }}>history_edu</span>
-                거래처 접촉 결과 기록
-              </h3>
-
-              <form onSubmit={handleSaveTouchpoint} className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      접촉 일자
-                    </label>
-                    <input
-                      type="date"
-                      value={touchDate}
-                      onChange={(e) => setTouchDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      접촉 채널
-                    </label>
-                    <select
-                      value={touchChannel}
-                      onChange={(e) => setTouchChannel(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="email">이메일</option>
-                      <option value="phone">전화</option>
-                      <option value="other">기타</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      접촉 결과
-                    </label>
-                    <select
-                      value={touchOutcome}
-                      onChange={(e) => setTouchOutcome(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="waiting_reply">회신 대기</option>
-                      <option value="planned">연락 예정</option>
-                      <option value="contacted">연락 완료</option>
-                      <option value="quote_requested">견적 요청</option>
-                      <option value="reorder_confirmed">재주문 확인</option>
-                      <option value="on_hold">거래 보류</option>
-                      <option value="not_needed">연락 불필요</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    접촉 메모 (최대 500자)
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={500}
-                    placeholder="예: 담당자 부재로 메일 발송 완료, 차주 화요일 일정 재확인 예정"
-                    value={touchNote}
-                    onChange={(e) => setTouchNote(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
-                  <div>
-                    <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer mb-1.5">
-                      <input
-                        type="checkbox"
-                        checked={hasNextDate}
-                        onChange={(e) => setHasNextDate(e.target.checked)}
-                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span>다음 연락 예정일 지정</span>
-                    </label>
-                    {hasNextDate && (
-                      <input
-                        type="date"
-                        value={nextContactDate}
-                        onChange={(e) => setNextContactDate(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                      />
+                        </button>
+                      ))
                     )}
                   </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      사용한 초안 (선택)
-                    </label>
-                    <select
-                      value={selectedDraftId ?? ''}
-                      onChange={(e) => setSelectedDraftId(e.target.value ? Number(e.target.value) : null)}
-                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 text-xs font-medium focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value="">(선택 안 함)</option>
-                      {currentEmailDraft && (
-                        <option value={currentEmailDraft.id}>
-                          이메일 초안 #{currentEmailDraft.id}
-                        </option>
-                      )}
-                    </select>
-                  </div>
                 </div>
+              )}
+            </div>
+          </div>
+        </header>
 
+        {/* ----------------------------------------------------------- */}
+        {/* WORKSPACE: LEFT ICON RAIL (64px) + MAIN BENTO CONTENT       */}
+        {/* ----------------------------------------------------------- */}
+        <div className="flex-1 w-full max-w-[1280px] mx-auto px-4 md:px-6 pt-3 pb-24 md:pb-10 flex gap-5">
+          {/* Left Icon Rail (>= 768px) (§5) */}
+          <aside
+            aria-label="빠른 이동 레일"
+            className="hidden md:flex flex-col items-center justify-between w-[64px] shrink-0 py-3 rounded-[999px] self-start sticky top-24 min-h-[520px]"
+            style={{ backgroundColor: 'var(--ztd-panel)', border: '1px solid var(--ztd-line)' }}
+          >
+            <div className="flex flex-col items-center gap-2">
+              {NAV_ITEMS.map((item) => {
+                const active = activeNav === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setActiveNav(item.id)}
+                    aria-label={item.label}
+                    title={item.label}
+                    className="w-[44px] h-[44px] rounded-full flex items-center justify-center transition-colors cursor-pointer"
+                    style={{
+                      backgroundColor: active ? 'var(--ztd-ink)' : 'transparent',
+                      color: active ? 'var(--ztd-on-ink)' : 'var(--ztd-muted)',
+                    }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: '20px' }} aria-hidden="true">
+                      {item.icon}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col items-center gap-2 pt-4 border-t" style={{ borderColor: 'var(--ztd-line2)' }}>
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(true)}
+                aria-label="사용 방법 도움말"
+                title="사용 방법 도움말"
+                className="w-[44px] h-[44px] rounded-full flex items-center justify-center hover:bg-[var(--ztd-lift)] transition-colors cursor-pointer"
+                style={{ color: 'var(--ztd-muted)' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '20px' }} aria-hidden="true">
+                  help_outline
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveNav('settings')}
+                aria-label="설정 및 리셋"
+                title="설정 및 리셋"
+                className="w-[44px] h-[44px] rounded-full flex items-center justify-center hover:bg-[var(--ztd-lift)] transition-colors cursor-pointer"
+                style={{ color: 'var(--ztd-muted)' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '20px' }} aria-hidden="true">
+                  logout
+                </span>
+              </button>
+            </div>
+          </aside>
+
+          {/* Main View Area */}
+          <main className="flex-1 min-w-0">
+            {activeNav === 'overview' && (
+              <OverviewPage
+                assessments={assessments}
+                priorityList={priorityList}
+                summary={summary}
+                refDate={refDate}
+                fileName={fileName}
+                briefing={briefing}
+                isBriefingLoading={isBriefingLoading}
+                touchpoints={allTouchpoints}
+                draftCustomerKeys={draftCustomerKeys}
+                weeklyGoal={weeklyGoal}
+                recencyWarning={recencyWarning}
+                onGenerateBriefing={handleGenerateBriefing}
+                onOpenCustomer={handleOpenCustomer}
+                onNavigatePriorityList={() => {
+                  setStatusFilter('priority');
+                  setActiveNav('customers');
+                }}
+                onNavigateImport={() => setActiveNav('import')}
+                onNavigateCustomers={() => {
+                  setStatusFilter('all');
+                  setActiveNav('customers');
+                }}
+              />
+            )}
+
+            {activeNav === 'customers' && (
+              <CustomersPage
+                assessments={assessments}
+                priorityList={priorityList}
+                summary={summary}
+                statusFilter={statusFilter}
+                searchQuery={searchQuery}
+                touchpoints={allTouchpoints}
+                followupsList={followupsList}
+                onFilterChange={setStatusFilter}
+                onSearchChange={setSearchQuery}
+                onOpenCustomer={handleOpenCustomer}
+                onBulkCreateMessages={handleBulkCreateMessages}
+                onToggleVip={(key, name, nextVip, proj) => handleToggleFlags(key, name, nextVip, proj)}
+                onToggleHold={(key, name, vip, nextProj) => handleToggleFlags(key, name, vip, nextProj)}
+                onExportAnalysisCSV={handleExportAnalysisCSV}
+                onExportTouchpointsCSV={handleExportTouchpointsCSV}
+              />
+            )}
+
+            {activeNav === 'message' && (
+              <MessagePage
+                assessments={assessments}
+                priorityList={priorityList}
+                currentAssessment={currentAssessment}
+                cleanRows={cleanRows}
+                selectedKey={selectedKey}
+                bulkQueue={bulkQueue}
+                contactName={contactName}
+                activeTab={activeTab}
+                tone={tone}
+                currentEmailDraft={currentEmailDraft}
+                currentCallDraft={currentCallDraft}
+                emailSubject={emailSubject}
+                emailBody={emailBody}
+                isGeneratingEmail={isGeneratingEmail}
+                isGeneratingCall={isGeneratingCall}
+                touchDate={touchDate}
+                touchChannel={touchChannel}
+                touchOutcome={touchOutcome}
+                touchNote={touchNote}
+                hasNextDate={hasNextDate}
+                nextContactDate={nextContactDate}
+                selectedDraftId={selectedDraftId}
+                touchHistory={currentTouchHistory}
+                onSelectCustomer={setSelectedKey}
+                onNextCustomer={handleNextCustomer}
+                onBackToCustomers={() => setActiveNav('customers')}
+                onToggleFlags={(vip, proj) =>
+                  currentAssessment &&
+                  handleToggleFlags(currentAssessment.customer_key, currentAssessment.display_name, vip, proj)
+                }
+                onContactNameChange={setContactName}
+                onTabChange={setActiveTab}
+                onToneChange={handleToneChange}
+                onGenerateEmail={(live) => handleGenerateEmailDraft(live)}
+                onGenerateCall={(live) => handleGenerateCallGuide(live)}
+                onEmailSubjectChange={setEmailSubject}
+                onEmailBodyChange={setEmailBody}
+                onSaveEditedEmail={handleSaveEditedEmail}
+                onCopyMessage={handleCopyMessage}
+                onQuickMarkContacted={handleQuickMarkContacted}
+                onOpenMailApp={handleOpenMailApp}
+                onOpenGmailWeb={handleOpenGmailWeb}
+                onTouchDateChange={setTouchDate}
+                onTouchChannelChange={setTouchChannel}
+                onTouchOutcomeChange={setTouchOutcome}
+                onTouchNoteChange={setTouchNote}
+                onHasNextDateChange={setHasNextDate}
+                onNextContactDateChange={setNextContactDate}
+                onSelectedDraftIdChange={setSelectedDraftId}
+                onSaveTouchpoint={handleSaveTouchpoint}
+              />
+            )}
+
+            {activeNav === 'import' && (
+              <ImportPage
+                fileName={fileName}
+                rawRows={rawRows}
+                headers={headers}
+                mapping={mapping}
+                quality={quality}
+                uploadError={uploadError}
+                onLoadDemo={() => {
+                  loadDemoData(refDate);
+                  showToast('데모 거래 데이터(126행)를 불러왔어요.');
+                }}
+                onFileSelected={handleFileSelected}
+                onMappingChange={handleMappingChange}
+                onExecuteAnalysis={handleExecuteAnalysis}
+              />
+            )}
+
+            {activeNav === 'settings' && (
+              <SettingsPage
+                refDate={refDate}
+                weeklyGoal={weeklyGoal}
+                demoMode={demoMode}
+                themeMode={themeMode}
+                serverLlmStatus={serverLlmStatus}
+                onRefDateChange={(d) => {
+                  setRefDate(d);
+                  setSetting('ref_date', d);
+                  if (rawRows.length > 0 && mapping.customer && mapping.date) {
+                    const q = buildClean(rawRows, mapping, d);
+                    setQuality(q);
+                    setCleanRows(q.clean_rows);
+                  }
+                }}
+                onWeeklyGoalChange={(n) => {
+                  setWeeklyGoal(n);
+                  setSetting('weekly_goal', String(n));
+                }}
+                onDemoModeChange={setDemoMode}
+                onThemeModeChange={setThemeMode}
+                onExportAnalysisCSV={handleExportAnalysisCSV}
+                onExportTouchpointsCSV={handleExportTouchpointsCSV}
+                onResetDemo={handleResetDemo}
+              />
+            )}
+          </main>
+        </div>
+
+        {/* ----------------------------------------------------------- */}
+        {/* MOBILE BOTTOM TAB BAR (< 768px) (§5)                        */}
+        {/* ----------------------------------------------------------- */}
+        <nav
+          aria-label="모바일 하단 메뉴"
+          className="md:hidden fixed bottom-0 inset-x-0 z-30 px-3 py-2 flex items-center justify-around"
+          style={{ backgroundColor: 'var(--ztd-panel)', borderTop: '1px solid var(--ztd-line)' }}
+        >
+          {NAV_ITEMS.map((item) => {
+            const active = activeNav === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveNav(item.id)}
+                className="min-w-[48px] h-[44px] px-2.5 rounded-full flex flex-col items-center justify-center gap-0.5 cursor-pointer"
+                style={{
+                  backgroundColor: active ? 'var(--ztd-ink)' : 'transparent',
+                  color: active ? 'var(--ztd-on-ink)' : 'var(--ztd-muted)',
+                }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }} aria-hidden="true">
+                  {item.icon}
+                </span>
+                <span className="text-[11px] font-semibold leading-none">{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* ----------------------------------------------------------- */}
+        {/* HELP MODAL (§10 Esc close)                                  */}
+        {/* ----------------------------------------------------------- */}
+        {showHelpModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="help-modal-title"
+          >
+            <div className="floating-surface w-full max-w-md rounded-[18px] p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 id="help-modal-title" className="text-[18px] font-bold" style={{ color: 'var(--ztd-ink)' }}>
+                  3단계 사용 안내
+                </h2>
                 <button
-                  type="submit"
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl transition-colors shadow-xs flex items-center justify-center gap-1.5"
+                  type="button"
+                  onClick={() => setShowHelpModal(false)}
+                  aria-label="닫기"
+                  className="w-9 h-9 rounded-full flex items-center justify-center hover:bg-[var(--ztd-lift)] cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-sm">save</span>
-                  <span>접촉 기록 저장</span>
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>close</span>
                 </button>
-
-                {touchSuccessMsg && (
-                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs p-3 rounded-lg font-bold flex items-center gap-1.5">
-                    <span className="material-symbols-outlined text-emerald-600 text-sm">check_circle</span>
-                    <span>{touchSuccessMsg}</span>
-                  </div>
-                )}
-              </form>
-
-              {/* History Table */}
-              <div className="pt-4 border-t border-slate-100">
-                <h4 className="font-bold text-slate-800 text-xs mb-2">
-                  📜 접촉 이력 내역 (최신순)
-                </h4>
-                {listTouchpoints(currentAssessment.customer_key).length === 0 ? (
-                  <div className="text-slate-400 text-xs py-3 text-center bg-slate-50 rounded-lg">
-                    아직 저장된 접촉 이력이 없습니다.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
-                        <tr>
-                          <th className="px-3 py-2">접촉일</th>
-                          <th className="px-3 py-2">채널</th>
-                          <th className="px-3 py-2">결과</th>
-                          <th className="px-4 py-2">메모</th>
-                          <th className="px-3 py-2 font-mono">다음 연락일</th>
-                          <th className="px-3 py-2 text-slate-400">기록 시각</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {listTouchpoints(currentAssessment.customer_key).map((h) => (
-                          <tr key={h.id} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 font-mono">{h.contact_date}</td>
-                            <td className="px-3 py-2 font-semibold">
-                              {h.channel === 'email' ? '이메일' : h.channel === 'phone' ? '전화' : '기타'}
-                            </td>
-                            <td className="px-3 py-2">
-                              <span className="bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded text-[11px]">
-                                {{
-                                  planned: '연락 예정',
-                                  contacted: '연락 완료',
-                                  waiting_reply: '회신 대기',
-                                  quote_requested: '견적 요청',
-                                  reorder_confirmed: '재주문 확인',
-                                  on_hold: '거래 보류',
-                                  not_needed: '연락 불필요',
-                                }[h.outcome] || h.outcome}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2 text-slate-700 max-w-xs truncate">{h.note || '-'}</td>
-                            <td className="px-3 py-2 font-mono font-bold text-slate-900">
-                              {h.next_contact_date || '-'}
-                            </td>
-                            <td className="px-3 py-2 text-slate-400 text-[11px] font-mono">{h.created_at}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+              </div>
+              <ol className="space-y-3 text-[15px] leading-[22px]" style={{ color: 'var(--ztd-muted)' }}>
+                <li>
+                  <strong style={{ color: 'var(--ztd-ink)' }}>1. 파일 가져오기</strong> — CSV 또는 XLSX 거래 원장을 올리면 기기 안에서 바로 품질 검사와 주기 분석을 마칩니다.
+                </li>
+                <li>
+                  <strong style={{ color: 'var(--ztd-ink)' }}>2. 거래처 확인</strong> — 평소 주기 대비 연락이 뜸해진 거래처를 공백 기간 순으로 확인합니다.
+                </li>
+                <li>
+                  <strong style={{ color: 'var(--ztd-ink)' }}>3. 문안 복사 &amp; 기록</strong> — 톤을 골라 문안을 다듬고 복사한 뒤, 연락 완료로 표시하면 다음 거래처로 이어집니다.
+                </li>
+              </ol>
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowHelpModal(false)}
+                  className="h-[44px] px-5 rounded-full font-semibold text-[14px] cursor-pointer"
+                  style={{ backgroundColor: 'var(--ztd-ink)', color: 'var(--ztd-on-ink)' }}
+                >
+                  확인했어요
+                </button>
               </div>
             </div>
           </div>
         )}
-      </main>
 
-      {/* ------------------------------------------------------------- */}
-      {/* API KEY CONFIG MODAL                                          */}
-      {/* ------------------------------------------------------------- */}
-      {showKeyModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-                  <span className="material-symbols-outlined">key</span>
-                </div>
-                <h3 className="font-extrabold text-slate-900 text-base">LLM API 키 설정</h3>
-              </div>
-              <button
-                onClick={() => setShowKeyModal(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <span className="material-symbols-outlined">close</span>
-              </button>
+        {/* ----------------------------------------------------------- */}
+        {/* BOTTOM CENTER TOAST (§6-8, aria-live="polite", 3s)         */}
+        {/* ----------------------------------------------------------- */}
+        <div
+          aria-live="polite"
+          className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+        >
+          {toast && (
+            <div
+              key={toast.id}
+              className="pointer-events-auto h-[44px] px-5 rounded-full flex items-center gap-3 text-[14px] font-medium"
+              style={{
+                backgroundColor: 'var(--ztd-ink)',
+                color: 'var(--ztd-on-ink)',
+                boxShadow: 'var(--app-shadow-float)',
+              }}
+            >
+              <span>{toast.message}</span>
+              {toast.onUndo && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.onUndo?.();
+                    setToast(null);
+                  }}
+                  className="font-bold underline underline-offset-2 cursor-pointer"
+                  style={{ color: 'var(--ztd-accent)' }}
+                >
+                  {toast.undoLabel || '실행 취소'}
+                </button>
+              )}
             </div>
-
-            <p className="text-xs text-slate-500 leading-relaxed">
-              <strong>Liner Router API 키</strong> 또는 <strong>Google Gemini API 키</strong>를 등록하면 실시간 라이브 문안 및 주간 브리핑 생성이 가능해집니다. 키가 비어있어도 안전한 기본 템플릿(폴백 모드)으로 모든 시연을 완주할 수 있습니다.
-            </p>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                API 키 입력
-              </label>
-              <input
-                type="password"
-                placeholder="sk-liner-... 또는 AIzaSy..."
-                value={tempApiKey}
-                onChange={(e) => setTempApiKey(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2.5 text-xs font-mono text-slate-900 focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => {
-                  setTempApiKey('');
-                  setApiKey('');
-                  setSetting('liner_api_key', '');
-                  setShowKeyModal(false);
-                }}
-                className="px-3 py-2 text-xs font-bold text-slate-500 hover:text-slate-700"
-              >
-                키 삭제 (폴백 모드 전환)
-              </button>
-              <button
-                onClick={() => {
-                  setApiKey(tempApiKey.trim());
-                  setSetting('liner_api_key', tempApiKey.trim());
-                  setShowKeyModal(false);
-                }}
-                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs py-2 px-4 rounded-lg shadow-xs"
-              >
-                저장하기
-              </button>
-            </div>
-          </div>
+          )}
         </div>
-      )}
       </div>
     </ThemeProvider>
   );

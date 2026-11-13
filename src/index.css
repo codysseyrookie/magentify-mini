@@ -1,9 +1,116 @@
 @import "tailwindcss";
 
+:root {
+  --ztd-bg: #FFFFFF;
+  --ztd-panel: #FFFFFF;
+  --ztd-ink: #14171B;
+  --ztd-muted: #5D6570;
+  --ztd-dim: #B3B9C2;
+  --ztd-accent: #0B8FD8;
+  --ztd-accent-text: #006DA8;
+  --ztd-on-accent: #14171B;
+  --ztd-accent2: #D8488C;
+  --ztd-accent3: #659815;
+  --ztd-on-ink: #FFFFFF;
+  --ztd-line: #E6E9ED;
+  --ztd-line2: #F0F2F5;
+  --ztd-neutral: #D5DAE0;
+  --ztd-neutral-strong: #9AA3AE;
+  --ztd-on-neutral-strong: #14171B;
+  --ztd-neutral-soft: #EEF1F4;
+  --ztd-lift: #F4F6F8;
+  --ztd-tint: rgba(11, 143, 216, 0.12);
+  --ztd-font: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, -apple-system, sans-serif;
+  --ztd-mono: "Roboto Mono", "Share Tech Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ztd-radius: 18px;
+  --ztd-radius-code: 14px;
+  --ztd-radius-mark: 4px;
+
+  /* Magentify Mini semantic extensions */
+  --app-canvas: var(--ztd-lift);
+  --app-gap: 16px;
+  --app-rail-width: 64px;
+  --app-pill: 999px;
+  --app-shadow-float: 0 8px 24px rgba(20, 23, 27, 0.08);
+
+  --status-risk-bg: rgba(216, 72, 140, 0.12);
+  --status-risk-text: #9B215D;
+  --status-attention-bg: rgba(216, 134, 24, 0.13);
+  --status-attention-text: #8A4F00;
+  --status-ok-bg: rgba(101, 152, 21, 0.12);
+  --status-ok-text: #3E6008;
+  --status-progress-bg: var(--ztd-tint);
+  --status-progress-text: var(--ztd-accent-text);
+  --status-hold-bg: var(--ztd-neutral-soft);
+  --status-hold-text: var(--ztd-muted);
+}
+
+[data-theme="dark"] {
+  --ztd-bg: #14171B;
+  --ztd-panel: #14171B;
+  --ztd-ink: #F1F3F5;
+  --ztd-muted: #A3ABB5;
+  --ztd-dim: #5B636D;
+  --ztd-accent: #D6FD70;
+  --ztd-accent-text: #D6FD70;
+  --ztd-on-accent: #14171B;
+  --ztd-accent2: #FF8CC1;
+  --ztd-accent3: #38C6F6;
+  --ztd-on-ink: #14171B;
+  --ztd-line: #2A2F36;
+  --ztd-line2: #22272D;
+  --ztd-neutral: #3A414A;
+  --ztd-neutral-strong: #5B636D;
+  --ztd-on-neutral-strong: #F1F3F5;
+  --ztd-neutral-soft: #262B31;
+  --ztd-lift: #1D2126;
+  --ztd-tint: rgba(214, 253, 112, 0.14);
+
+  --app-canvas: #0E1114;
+  --app-shadow-float: 0 8px 24px rgba(0, 0, 0, 0.36);
+
+  --status-risk-bg: rgba(255, 140, 193, 0.14);
+  --status-risk-text: #FF9ECA;
+  --status-attention-bg: rgba(251, 191, 36, 0.14);
+  --status-attention-text: #FCD34D;
+  --status-ok-bg: rgba(56, 198, 246, 0.14);
+  --status-ok-text: #67D4FA;
+  --status-progress-bg: var(--ztd-tint);
+  --status-progress-text: var(--ztd-accent-text);
+  --status-hold-bg: var(--ztd-neutral-soft);
+  --status-hold-text: var(--ztd-muted);
+}
+
 @layer base {
-  html, body, button, input, select, textarea {
-    font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif !important;
+  html, body {
+    font-family: var(--ztd-font);
+    background-color: var(--app-canvas);
+    color: var(--ztd-ink);
+    font-size: 16px;
+    line-height: 1.5;
   }
+
+  button, input, select, textarea {
+    font-family: var(--ztd-font);
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--ztd-mono);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--ztd-accent);
+    outline-offset: 2px;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Google Material Symbols Outlined */
@@ -24,105 +131,114 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* Flat Vector Badges matching PRD */
-.badge-normal {
-  background-color: #ECFDF5;
-  color: #065F46;
-  border: 1px solid #A7F3D0;
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* Bento Card Surface */
+.bento-card {
+  background-color: var(--ztd-panel);
+  border: 1px solid var(--ztd-line);
+  border-radius: var(--ztd-radius);
+  padding: 20px 24px;
 }
 
-.badge-attention {
-  background-color: #FFFBEB;
-  color: #92400E;
-  border: 1px solid #FDE68A;
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.bento-sub {
+  background-color: var(--ztd-lift);
+  border-radius: var(--ztd-radius-code);
 }
 
-.badge-risk {
-  background-color: #FEF2F2;
-  color: #991B1B;
-  border: 1px solid #FECACA;
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.floating-surface {
+  background-color: var(--ztd-panel);
+  border: 1px solid var(--ztd-line);
+  box-shadow: var(--app-shadow-float);
 }
 
-.badge-high-risk {
-  background-color: #F5F3FF;
-  color: #5B21B6;
-  border: 1px solid #DDD6FE;
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
+/* Dot + Text Status Badges (§2-2) */
+.status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-}
-
-.badge-hold {
-  background-color: #F1F5F9;
-  color: #475569;
-  border: 1px solid #CBD5E1;
-  padding: 3px 9px;
-  border-radius: 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.badge-vip {
-  background-color: #FEF3C7;
-  color: #B45309;
-  border: 1px solid #FCD34D;
-  padding: 2px 7px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  font-weight: 800;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-/* Metric Box Styling */
-.metric-box {
-  background-color: #FFFFFF;
-  border: 1px solid #E2E8F0;
-  border-radius: 12px;
-  padding: 16px;
-  text-align: center;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-}
-
-/* Source Tag */
-.source-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 0.78rem;
-  color: #475569;
-  background: #F8FAFC;
-  border: 1px solid #E2E8F0;
-  padding: 3px 8px;
-  border-radius: 5px;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 16px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.status-badge--risk {
+  background-color: var(--status-risk-bg);
+  color: var(--status-risk-text);
+}
+.status-badge--risk .status-badge-dot {
+  background-color: var(--ztd-accent2);
+}
+
+.status-badge--attention {
+  background-color: var(--status-attention-bg);
+  color: var(--status-attention-text);
+}
+.status-badge--attention .status-badge-dot {
+  background-color: #D97706;
+}
+
+.status-badge--progress {
+  background-color: var(--status-progress-bg);
+  color: var(--status-progress-text);
+}
+.status-badge--progress .status-badge-dot {
+  background-color: var(--ztd-accent);
+}
+
+.status-badge--ok {
+  background-color: var(--status-ok-bg);
+  color: var(--status-ok-text);
+}
+.status-badge--ok .status-badge-dot {
+  background-color: var(--ztd-accent3);
+}
+
+.status-badge--hold {
+  background-color: var(--status-hold-bg);
+  color: var(--status-hold-text);
+}
+.status-badge--hold .status-badge-dot {
+  background-color: var(--ztd-muted);
+}
+
+/* Card Entrance Motion (§9) */
+@keyframes bentoEnter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bento-enter {
+  animation: bentoEnter 200ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bento-enter {
+    animation: none !important;
+    transform: none !important;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Ensure ztd-charts ChartCard matches bento surface cleanly */
+.ztd-chart-wrapper > div,
+.ztd-chart-wrapper article,
+.ztd-chart-wrapper section {
+  border-radius: var(--ztd-radius) !important;
 }

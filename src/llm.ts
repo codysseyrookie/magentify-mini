@@ -122,7 +122,9 @@ export function fallbackBriefing(top: Assessment[]): BriefingContent {
   };
 }
 
-export function fallbackEmail(a?: Assessment): EmailDraftContent {
+export type MessageTone = '정중하게' | '친근하게' | '간단하게';
+
+export function fallbackEmail(a?: Assessment, tone: MessageTone = '정중하게'): EmailDraftContent {
   const q = a?.questions && a.questions.length > 0
     ? a.questions
     : [
@@ -130,14 +132,29 @@ export function fallbackEmail(a?: Assessment): EmailDraftContent {
         '현재 필요한 물량이나 일정이 있는지',
       ];
 
+  if (tone === '친근하게') {
+    return {
+      subject: '[거래처명] 안부 인사드립니다 · 최근 일정 확인',
+      body: '안녕하세요, [담당자명]님!\n잘 지내고 계시죠? 한동안 소식이 뜸한 것 같아 안부차 인사드립니다.\n최근 현장 작업이나 발주 일정에 변동 사항이 있으실까요? 편하신 시간에 가볍게 회신 주시면 맞춰 준비하겠습니다.\n오늘도 좋은 하루 보내세요!',
+      check_questions: q,
+    };
+  }
+  if (tone === '간단하게') {
+    return {
+      subject: '[거래처명] 최근 발주 일정 확인 요청',
+      body: '안녕하세요, [담당자명]님.\n최근 거래 일정 확인차 간단히 연락드립니다.\n가까운 시일 내 예정된 발주나 필요한 품목이 있으시면 말씀 부탁드립니다.\n감사합니다.',
+      check_questions: q,
+    };
+  }
+
   return {
     subject: '[거래처명] 안부 인사 및 거래 일정 확인 건',
-    body: '안녕하세요, [담당자명]님.\n한동안 연락이 뜸해 안부차 인사드립니다.\n최근 일정이나 변경된 사항이 있는지 편하게 말씀해 주세요. 도움이 필요한 부분이 있으면 확인해 드리겠습니다.\n감사합니다.',
+    body: '안녕하세요, [담당자명]님.\n한동안 연락이 뜸해 안부차 정중히 인사드립니다.\n최근 생산 일정이나 발주 계획에 변경된 사항이 있으신지 편하게 말씀해 주세요. 도움이 필요한 부분이 있으면 성실히 확인해 드리겠습니다.\n감사합니다.',
     check_questions: q,
   };
 }
 
-export function fallbackCall(a?: Assessment): CallGuideContent {
+export function fallbackCall(a?: Assessment, tone: MessageTone = '정중하게'): CallGuideContent {
   const q = a?.questions && a.questions.length > 0
     ? a.questions
     : [
@@ -145,9 +162,15 @@ export function fallbackCall(a?: Assessment): CallGuideContent {
         '가까운 시일 내 필요하신 자재나 부품 일정이 있으신가요?',
       ];
 
+  const opening = tone === '친근하게'
+    ? '안녕하세요, [거래처명] [담당자명]님! 요즘 잘 지내시죠? 한동안 연락이 뜸해서 안부차 전화드렸습니다.'
+    : tone === '간단하게'
+    ? '안녕하세요, [거래처명] 담당자님. 다음 발주 일정만 간단히 여쭤보려고 연락드렸습니다.'
+    : '안녕하십니까, [거래처명] [담당자명]님. 평소 거래 관련 안부차 정중히 연락드렸습니다.';
+
   return {
     purpose: '거래처 안부 확인 및 향후 발주 일정 파악',
-    opening: '안녕하십니까, [거래처명] 담당자님. 평소 거래 관련 안부차 연락드렸습니다.',
+    opening,
     questions: q,
     next_step: '필요 시 상세 사양 확인 및 이메일 회신 요청',
     after_call: [
@@ -179,65 +202,26 @@ export function setCachedResult<T>(key: string, data: T): void {
   }
 }
 
-// Real API Caller
-async function callLinerOrGeminiAPI(
-  apiKey: string,
+// Server-side LLM Proxy Caller
+async function callServerLLMAPI(
   systemPrompt: string,
   userPrompt: string
 ): Promise<string> {
-  const trimmedKey = apiKey.trim();
-
-  // If Google Gemini API Key
-  if (trimmedKey.startsWith('AIza')) {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${trimmedKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: `${systemPrompt}\n\n${userPrompt}` }
-            ]
-          }
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          responseMimeType: 'application/json'
-        }
-      })
-    });
-    if (!res.ok) {
-      throw new Error(`Gemini API error: ${res.statusText}`);
-    }
-    const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  }
-
-  // Otherwise treat as Liner Router API
-  const baseUrl = 'https://platform.liner.com/api/v1/chat/completions';
-  const res = await fetch(baseUrl, {
+  const res = await fetch('/api/llm/generate', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${trimmedKey}`
     },
-    body: JSON.stringify({
-      model: 'liner-gpt-router',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.2
-    })
+    body: JSON.stringify({ systemPrompt, userPrompt }),
   });
 
   if (!res.ok) {
-    throw new Error(`Liner API HTTP error: ${res.status} ${res.statusText}`);
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.error || `Server LLM HTTP error: ${res.status}`);
   }
 
   const data = await res.json();
-  return data.choices?.[0]?.message?.content || '';
+  return data.text || '';
 }
 
 function cleanJsonResponse(rawText: string): any {
@@ -272,8 +256,8 @@ export async function generateBriefing(
   // Fallback content as base
   const fb = fallbackBriefing(top4);
 
-  // If API key is present and forceLive or not in demo cache
-  if (options.apiKey && options.apiKey.trim()) {
+  // If forceLive or not in demo mode, try calling server-side LLM
+  if (options.forceLive || !options.demoMode) {
     try {
       const startTime = performance.now();
       const systemPrompt = `너는 B2B 제조업 대표를 위한 거래처 관리 비서다.
@@ -288,7 +272,7 @@ export async function generateBriefing(
 
       const userPrompt = `분석 요약: ${JSON.stringify(summary)}\n우선 거래처: ${JSON.stringify(top4.map(a => ({ id: a.alias, status: a.status, vip: a.vip, gap: a.gap_days, median: a.median_interval, ratio: a.ratio })))}`;
 
-      const text = await callLinerOrGeminiAPI(options.apiKey, systemPrompt, userPrompt);
+      const text = await callServerLLMAPI(systemPrompt, userPrompt);
       const parsed = cleanJsonResponse(text);
       const violations = validate('briefing', parsed, new Set(), new Set(top4.map(a => a.alias)));
       if (violations.length === 0) {
@@ -305,7 +289,7 @@ export async function generateBriefing(
     }
   }
 
-  // If forceLive without API key (simulate realistic demo live call)
+  // If forceLive without API key or on error, simulate realistic demo live call
   if (options.forceLive) {
     await new Promise(r => setTimeout(r, 650));
     setCachedResult(cacheKey, fb);
@@ -329,9 +313,10 @@ export async function generateBriefing(
 
 export async function generateEmail(
   a: Assessment,
-  options: { demoMode: boolean; forceLive?: boolean; apiKey?: string }
+  options: { demoMode: boolean; forceLive?: boolean; apiKey?: string; tone?: MessageTone }
 ): Promise<LlmResult<EmailDraftContent>> {
-  const cacheKey = `email_${a.customer_key}_${a.gap_days}_${a.ratio}`;
+  const tone: MessageTone = options.tone || '정중하게';
+  const cacheKey = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
 
   if (options.demoMode && !options.forceLive) {
     const cached = getCachedResult<EmailDraftContent>(cacheKey);
@@ -345,12 +330,13 @@ export async function generateEmail(
     }
   }
 
-  const fb = fallbackEmail(a);
+  const fb = fallbackEmail(a, tone);
 
-  if (options.apiKey && options.apiKey.trim()) {
+  if (options.forceLive || !options.demoMode) {
     try {
       const startTime = performance.now();
-      const systemPrompt = `너는 소규모 제조사 대표를 대필하는 정중한 업무 이메일 작성 비서다.
+      const systemPrompt = `너는 소규모 제조사 대표를 대필하는 업무 이메일 작성 비서다.
+문안 어조(톤)는 반드시 '${tone}' 스타일로 작성하라.
 거래처명은 '[거래처명]', 담당자명은 '[담당자명]' 자리표시자를 사용하라.
 규칙:
 1. 가격, 납기, 할인, 재고, 혜택을 약속하지 않는다.
@@ -359,9 +345,9 @@ export async function generateEmail(
 4. 순수 JSON으로만 응답하라:
 {"subject": "이메일 제목", "body": "이메일 본문", "check_questions": ["질문1", "질문2"]}`;
 
-      const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소간격 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}`;
+      const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소간격 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
 
-      const text = await callLinerOrGeminiAPI(options.apiKey, systemPrompt, userPrompt);
+      const text = await callServerLLMAPI(systemPrompt, userPrompt);
       const parsed = cleanJsonResponse(text);
       const violations = validate('email', parsed, new Set());
       if (violations.length === 0) {
@@ -400,9 +386,10 @@ export async function generateEmail(
 
 export async function generateCallGuide(
   a: Assessment,
-  options: { demoMode: boolean; forceLive?: boolean; apiKey?: string }
+  options: { demoMode: boolean; forceLive?: boolean; apiKey?: string; tone?: MessageTone }
 ): Promise<LlmResult<CallGuideContent>> {
-  const cacheKey = `call_${a.customer_key}_${a.gap_days}_${a.ratio}`;
+  const tone: MessageTone = options.tone || '정중하게';
+  const cacheKey = `call_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
 
   if (options.demoMode && !options.forceLive) {
     const cached = getCachedResult<CallGuideContent>(cacheKey);
@@ -416,12 +403,13 @@ export async function generateCallGuide(
     }
   }
 
-  const fb = fallbackCall(a);
+  const fb = fallbackCall(a, tone);
 
-  if (options.apiKey && options.apiKey.trim()) {
+  if (options.forceLive || !options.demoMode) {
     try {
       const startTime = performance.now();
       const systemPrompt = `너는 소규모 제조사 대표를 위한 전화 통화 가이드 작성 비서다.
+대화 어조(톤)는 '${tone}' 스타일로 작성하라.
 거래처명은 '[거래처명]', 담당자명은 '[담당자명]' 자리표시자를 그대로 사용하라.
 규칙:
 1. 가격, 납기, 할인, 특가를 약속하지 않는다.
@@ -429,9 +417,9 @@ export async function generateCallGuide(
 3. 순수 JSON으로만 응답하라:
 {"purpose": "통화 목적", "opening": "첫 인사", "questions": ["질문1", "질문2"], "next_step": "다음 단계", "after_call": ["기록1", "기록2"]}`;
 
-      const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소주기 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}`;
+      const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소주기 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
 
-      const text = await callLinerOrGeminiAPI(options.apiKey, systemPrompt, userPrompt);
+      const text = await callServerLLMAPI(systemPrompt, userPrompt);
       const parsed = cleanJsonResponse(text);
       const violations = validate('call', parsed, new Set());
       if (violations.length === 0) {

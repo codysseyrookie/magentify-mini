@@ -179,6 +179,12 @@ export function addTouchpoint(data: {
   return newTouch;
 }
 
+export function deleteTouchpoint(touchpointId: number): void {
+  const touchpoints = getTouchpoints();
+  const filtered = touchpoints.filter(t => t.id !== touchpointId);
+  localStorage.setItem(STORAGE_KEYS.TOUCHPOINTS, JSON.stringify(filtered));
+}
+
 export function listTouchpoints(customerKey: string): TouchpointRecord[] {
   const touchpoints = getTouchpoints();
   return touchpoints.filter(t => t.customer_key === customerKey);
