@@ -28,6 +28,8 @@
 | `api/_llm.ts` | `LINER_API_KEY`가 있으면 Liner Model API(OpenAI 호환 `chat/completions`)를 호출한다. 타임아웃(기본 20초), 429·5xx·타임아웃 시 1회 재시도, 401·403은 재시도 안 함, 하루 호출 상한(`LINER_DAILY_LIMIT`). Liner 키가 없을 때만 Gemini 키를 쓴다. |
 | `server.ts` | 개발·로컬 실행용 Express 서버. `/api/llm/status`, `/api/llm/generate`를 `api/_llm.ts`로 연결한다. |
 | `api/llm/*.ts` | 같은 로직을 Vercel 서버리스 함수로 제공한다. (배포 환경) |
+| `api/_news.ts`, `api/llm/news.ts` | **Liner Search API**(웹 검색, `POST /api/v1/tools/search/web`)로 업종 동향 기사를 찾는다. 한국어(`lang=ko`, `country_code=kr`), 최근 1개월, `include_knowledge:false`. 결과는 서버에서 걸러(SNS·블로그, 날짜 없는 글, 해외 매체 제외) 상위 3건만 돌려준다. |
+| `src/news.ts` | 업종 동향 조회(저장본 우선, 실패 시 동향 없이 진행)와 캐시 |
 | `src/llm.ts` | 브리핑·이메일·통화 가이드 프롬프트와 응답 검증. 브라우저에는 API 키가 전달되지 않는다. |
 
 **응답 라벨은 사실대로 표시한다.**
@@ -57,13 +59,16 @@ Router API(`liner-gpt-router`)의 `routing_strategy`를 작업 성격에 맞게 
 magentify-mini/
 ├── api/
 │   ├── _llm.ts            # LLM 서버 로직 (공급자 선택, 재시도, 타임아웃, 일일 한도)
+│   ├── _news.ts           # 업종 동향 검색 (Liner Search API, 결과 필터링)
 │   └── llm/
 │       ├── generate.ts    # Vercel 함수: POST /api/llm/generate
+│       ├── news.ts        # Vercel 함수: POST /api/llm/news
 │       └── status.ts      # Vercel 함수: GET  /api/llm/status
 ├── server.ts              # Express 개발·로컬 서버 (같은 로직 사용)
 ├── src/
 │   ├── analysis.ts        # 컬럼 인식, 품질 검사, 분석, 우선순위 (순수 함수)
 │   ├── llm.ts             # 프롬프트, 검증, 캐시, 폴백, 호출 계층
+│   ├── news.ts            # 업종 동향 조회와 캐시 (클라이언트)
 │   ├── storage.ts         # 브라우저 localStorage (플래그, 초안, 접촉 기록, API 로그)
 │   ├── demoData.ts        # 데모 CSV 126행, CSV/XLSX 읽기
 │   ├── App.tsx, components/   # 화면 (개요, 거래처, 문안, 가져오기, 설정)
@@ -105,7 +110,8 @@ npm run dev                 # http://localhost:3000
 | `LINER_BASE_URL` | `https://platform.liner.com/api/v1` | `/chat/completions`는 자동으로 붙는다 (붙여 넣어도 된다) |
 | `LINER_MODEL` | `liner-gpt-router` | 사용 가능한 모델은 Liner 문서의 모델 목록 참고 |
 | `LINER_TIMEOUT_SEC` | 20 | 호출 제한 시간 |
-| `LINER_DAILY_LIMIT` | 200 | 하루 live 호출 상한. 넘으면 폴백 |
+| `LINER_DAILY_LIMIT` | 200 | 하루 live 호출 상한(Model API와 Search API 합산). 넘으면 폴백 |
+| `LINER_SEARCH_TIMEOUT_SEC` | 20 | 업종 동향 검색 제한 시간 |
 | `GEMINI_API_KEY` | (없음) | Liner 키가 없을 때만 쓰는 대체 공급자 |
 | `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH` | | 이전 버전(Streamlit) 호환용 이름. 현재 화면 설정에서 변경한다 |
 
@@ -125,7 +131,7 @@ npm run dev                 # http://localhost:3000
 
 ### 응답 저장본 (심사자가 키 없이도 볼 수 있게)
 
-`public/cache/llm-cache.json`에 실제 Liner Model API 응답 41건(브리핑 1, 12개 거래처의 이메일·통화 가이드, 우선 확인 4곳은 3가지 톤)이 포함되어 있다. 2026-11-13에 생성했고, 가상 거래처 요약 수치만 전송했다. 검증(스키마, 금지어, 입력 외 숫자, 영어 필드명 노출)을 통과한 응답만 저장한다.
+`public/cache/llm-cache.json`에 실제 Liner Model API 응답 53건(업종 동향 포함 이메일 12건 포함, 업종 동향 기사는 `public/cache/news-cache.json`)(브리핑 1, 12개 거래처의 이메일·통화 가이드, 우선 확인 4곳은 3가지 톤)이 포함되어 있다. 2026-11-13에 생성했고, 가상 거래처 요약 수치만 전송했다. 검증(스키마, 금지어, 입력 외 숫자, 영어 필드명 노출)을 통과한 응답만 저장한다.
 
 ```bash
 # .env에 LINER_API_KEY를 넣은 뒤
@@ -138,7 +144,7 @@ npm run cache:generate -- --force   # 전체 다시 생성
 ## 7. 테스트
 
 ```bash
-npm test            # vitest 77개
+npm test            # vitest 107개
 npm run lint        # tsc --noEmit
 npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 ```
@@ -150,6 +156,8 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | `tests/server_llm.test.ts` | Liner 주소 보정, 공급자 우선순위, 재시도 정책, 401 시 재시도 없음과 키 비노출, 타임아웃, 일일 한도 |
 | `tests/vercel_handlers.test.ts` | Vercel 함수의 메서드·본문·키 없음 처리 |
 | `tests/apiStats.test.ts` | 호출 현황 계산(성공률, 성공 호출만의 평균 시간, 토큰 합계, 작업별 모델·전략 횟수) |
+| `tests/news.test.ts` | 검색어 정리, 결과 필터링(SNS·날짜 없음·해외 매체·중복 제외, 최대 3건), Liner Search 호출 형식·재시도·401·타임아웃·한도, Vercel 함수 |
+| `tests/news_client.test.ts` | 저장본 우선·forceLive·키 없음·빈 결과·연결 실패, 이메일 프롬프트에는 제목만 전달, 기사 숫자·링크 인용 금지, 캐시 키 |
 
 ## 8. 배포 (Vercel)
 
@@ -161,6 +169,7 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 
 - API 키는 서버 환경변수에만 있고 브라우저와 응답 본문에는 전달되지 않는다. `.env`는 `.gitignore`로 제외된다.
 - API에는 실제 거래처명, 담당자명, 연락처를 보내지 않는다. 별칭(C01…)과 요약 수치만 보낸다.
+- 업종 동향 검색에는 사용자가 고른 일반 검색어(기본 "제조업 중소기업 수주 동향 뉴스", 최대 60자)만 전송한다. 이메일에는 기사 제목만 참고 자료로 전달하고, 기사 내용·숫자·링크·매체명은 본문에 넣지 못하게 검증한다.
 - 데모와 영상, 저장소에는 가상 데이터만 사용한다.
 - 제출 전 `npm run check:secrets`로 키 문자열이 없는지 검사한다.
 
@@ -172,11 +181,13 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | 구분 | 내용 |
 | :--- | :--- |
 | 기존(프로토타입) | 화면 5개, 분석 로직(`src/analysis.ts`), localStorage 저장, 데모 데이터, 기획서·PRD 문서 |
-| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, 작업별 Router 전략(`routing_strategy`)과 실제 응답 모델 표시, 설정 화면의 Liner API 호출 현황 패널, vitest 77개, 키 검사 스크립트, 응답 저장본 41건, 이 README |
+| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, 작업별 Router 전략(`routing_strategy`)과 실제 응답 모델 표시, 설정 화면의 Liner API 호출 현황 패널, **업종 동향 + 출처 칩(Liner Search API)**, vitest 107개, 키 검사 스크립트, 응답 저장본 53건과 업종 동향 저장본, 이 README |
 
 ## 11. 확인된 사실 (2026-11-13 기준)
 
 - Liner Model API 연결 확인: `https://platform.liner.com/api/v1/chat/completions`, 모델 `liner-gpt-router`, 인증 `Authorization: Bearer` 방식으로 호출 성공. 브리핑 1회 응답 시간 약 5.3초(기본 타임아웃 20초 안).
+- Liner Search API(웹 검색) 확인: 한국어 질의가 1.4~2.7초에 응답한다. 결과에는 SNS, 시장조사 광고성 페이지, 날짜 없는 글, 해외 지역 소식이 섞여 나와서 서버에서 필터링한다. 기본 검색어는 4개를 비교해 통신사·일간지 기사가 가장 많이 나온 "제조업 중소기업 수주 동향 뉴스"로 정했다(PRD의 "금속 가공 업계 동향"은 시장조사 보고서 위주로 나왔다).
+- 업종 동향 기사는 연락 계기로 제목만 참고하고 내용은 사실 확인 전이라고 화면에 표시한다.
 - Router `routing_strategy` 확인: 같은 요청에 대해 `cost`는 `gpt-6-luna`, 기본(`balanced`)은 `gpt-6.1-terra`, `quality`는 `gpt-6.1-sol`이 응답했고, 허용되지 않은 값은 400(`must be one of: cost, balanced, quality`)으로 거절된다. 응답의 `usage`에는 토큰 수가 오며 비용(`usage.cost`)은 오지 않아 비용은 표시하지 않는다.
 - 앱에서 **새로 생성**을 눌렀을 때 "실시간 AI 응답" 라벨과 호출 로그(공급자 liner, 성공)가 남는 것을 확인했다.
 - 키가 없는 환경에서는 "기본 템플릿" 라벨이 표시되고, 저장본이 있으면 "Liner Model API 응답(저장본)"으로 표시된다.
@@ -199,7 +210,8 @@ PRD v1.1은 Streamlit/Python 기준으로 쓰였다. 구현은 아래처럼 바�
 | 테스트 | `test_golden.py`, `test_llm_validate.py` | `tests/*.test.ts` (golden, llm, server_llm, vercel_handlers) |
 | 추가된 검증 | 금지어, 입력 외 숫자 | + 브리핑의 영어 필드명 노출 금지, headline/caution의 별칭 노출 금지 |
 | 우선 확인 순서 | 대성정밀, 우리테크, 동양프레스, 세진금속 | 동일(골든 테스트로 고정) |
-| 미구현(P1) | 질문하기, 업종 동향 | 미구현(PRD 8장 판단 시점에 따라 11/21에 결정) |
+| 업종 동향(P1, S2) | Liner Search API로 기사 1~3건, 출처·제목·발행일 표시, 이메일에는 "최근 업계 소식" 수준으로만 언급 | 구현(기본 검색어는 위 11장 사유로 변경, 해외 매체 제외 필터 추가) |
+| 미구현(P1) | 질문하기 | 미구현(PRD 8장 판단 시점에 따라 11/21에 결정) |
 
 ## 13. 문서
 

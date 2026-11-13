@@ -7,7 +7,8 @@ import {
   SummaryCounts
 } from './types';
 import { logApiCall } from './storage';
-import type { RoutingStrategy, TokenUsage } from './types';
+import type { NewsItem, RoutingStrategy, TokenUsage } from './types';
+import { newsFingerprint } from './news';
 
 export const FORBIDDEN_WORDS = [
   '확정',
@@ -127,6 +128,11 @@ export function validate(
     if (dumpedStr.includes(word)) {
       violations.push(`금지어 포함: '${word}'`);
     }
+  }
+
+  // 이메일에는 링크를 넣지 않는다(업종 동향 출처는 화면의 출처 칩으로만 표시)
+  if (task === 'email' && /https?:\/\//i.test(dumpedStr)) {
+    violations.push('이메일에 링크가 포함되어 있습니다.');
   }
 
   // 입력에 없는 숫자 인용 검사 (허용 집합이 주어진 경우에만)
@@ -339,6 +345,8 @@ interface RunTaskParams<T> {
   systemPrompt: string;
   userPrompt: string;
   allowedIds?: Set<string>;
+  /** 숫자 인용 허용 범위를 정할 텍스트(없으면 userPrompt). 업종 동향 기사 제목의 숫자는 허용하지 않기 위해 쓴다. */
+  allowedNumbersText?: string;
   options: { demoMode: boolean; forceLive?: boolean; strategy?: RoutingStrategy };
 }
 
@@ -370,7 +378,7 @@ export async function runTask<T>(p: RunTaskParams<T>): Promise<LlmResult<T>> {
   }
 
   const strategy: RoutingStrategy = options.strategy ?? STRATEGY_BY_TASK[task];
-  const allowedNumbers = buildAllowedNumbers(userPrompt);
+  const allowedNumbers = buildAllowedNumbers(p.allowedNumbersText ?? userPrompt);
   let prompt = userPrompt;
   let lastCode = 'unknown';
 
@@ -430,9 +438,24 @@ export function briefingCacheKey(top: Assessment[]): string {
   return `briefing_${top.slice(0, 4).map(t => `${t.customer_key}:${t.gap_days}`).join('_')}`;
 }
 
-export function emailCacheKey(a: Assessment, tone: MessageTone = '정중하게'): string {
-  return `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+export function emailCacheKey(a: Assessment, tone: MessageTone = '정중하게', news: NewsItem[] = []): string {
+  const base = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+  return news.length > 0 ? `${base}_news-${newsFingerprint(news)}` : base;
 }
+
+/** 이메일 프롬프트에 덧붙일 업종 동향 블록(제목만 전달) */
+export function newsPromptBlock(news: NewsItem[]): string {
+  if (news.length === 0) return '';
+  return `\n\n참고 업계 소식(제목만, 사실 확인 전):\n${news.map((n, i) => `${i + 1}) ${n.title} (${n.hostname}, ${n.date})`).join('\n')}`;
+}
+
+export const NEWS_SYSTEM_RULES = `
+
+업계 소식 활용 규칙:
+- 입력의 '참고 업계 소식'은 연락 계기로만 쓴다. 본문에는 '최근 업계 소식을 접하며 안부를 여쭤다' 정도로 한 문장만 언급한다.
+- 기사 제목의 내용, 숫자, 수치, 전망을 사실처럼 인용하거나 평가하지 않는다. 제목을 그대로 옮기지 않는다.
+- 링크나 매체명을 본문에 넣지 않는다.
+- 거래처의 사정을 추측하지 않는다.`;
 
 export function callCacheKey(a: Assessment, tone: MessageTone = '정중하게'): string {
   return `call_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
@@ -476,10 +499,19 @@ export async function generateBriefing(
 
 export async function generateEmail(
   a: Assessment,
-  options: { demoMode: boolean; forceLive?: boolean; apiKey?: string; tone?: MessageTone }
+  options: {
+    demoMode: boolean;
+    forceLive?: boolean;
+    apiKey?: string;
+    tone?: MessageTone;
+    strategy?: RoutingStrategy;
+    /** 업종 동향 기사(제목만 전달됨). 비어 있으면 동향 없이 작성 */
+    news?: NewsItem[];
+  }
 ): Promise<LlmResult<EmailDraftContent>> {
   const tone: MessageTone = options.tone || '정중하게';
-  const cacheKey = emailCacheKey(a, tone);
+  const news = options.news ?? [];
+  const cacheKey = emailCacheKey(a, tone, news);
 
   const systemPrompt = `너는 소규모 제조사 대표를 대필하는 업무 이메일 작성 비서다.
 문안 어조(톤)는 반드시 '${tone}' 스타일로 작성하라.
@@ -498,8 +530,10 @@ export async function generateEmail(
     task: 'email',
     cacheKey,
     fallbackContent: fallbackEmail(a, tone),
-    systemPrompt,
-    userPrompt,
+    systemPrompt: news.length > 0 ? systemPrompt + NEWS_SYSTEM_RULES : systemPrompt,
+    userPrompt: userPrompt + newsPromptBlock(news),
+    // 기사 제목에 있는 숫자는 인용 허용 범위에 넣지 않는다.
+    allowedNumbersText: userPrompt,
     options,
   });
 }

@@ -9,7 +9,9 @@ import {
   DraftRecord,
   TouchpointRecord,
   LlmResult,
+  NewsItem,
 } from './types';
+import { DEFAULT_NEWS_QUERY, fetchNews } from './news';
 import { DEMO_CSV_DATA, parseCSV, parseExcelBuffer, downloadCSV } from './demoData';
 import {
   suggestMapping,
@@ -118,6 +120,9 @@ export default function App() {
   const [emailSubject, setEmailSubject] = useState<string>('');
   const [emailBody, setEmailBody] = useState<string>('');
   const [isGeneratingEmail, setIsGeneratingEmail] = useState<boolean>(false);
+  const [includeNews, setIncludeNews] = useState<boolean>(false);
+  const [newsQuery, setNewsQuery] = useState<string>(DEFAULT_NEWS_QUERY);
+  const [isNewsLoading, setIsNewsLoading] = useState<boolean>(false);
   const [isGeneratingCall, setIsGeneratingCall] = useState<boolean>(false);
 
   // Touchpoint Form
@@ -397,8 +402,27 @@ export default function App() {
     const activeTone = overrideTone || tone;
     setIsGeneratingEmail(true);
     try {
-      const res = await generateEmail(currentAssessment, { demoMode, forceLive, tone: activeTone });
-      const saved = saveDraft(currentAssessment.customer_key, 'email', res.source, res.content, refDate, res.source === 'live' ? res.model ?? null : null);
+      // 업종 동향: 체크했을 때만 Liner Search를 쓴다(데모 모드는 저장본 우선). 실패하면 동향 없이 작성한다.
+      let news: NewsItem[] = [];
+      let newsSource: 'live' | 'cache' | null = null;
+      if (includeNews) {
+        setIsNewsLoading(true);
+        const nr = await fetchNews(newsQuery, { demoMode, forceLive });
+        setIsNewsLoading(false);
+        if (nr.items.length > 0 && nr.source !== 'none') {
+          news = nr.items;
+          newsSource = nr.source;
+        } else {
+          showToast('업종 동향을 가져오지 못해 동향 없이 작성했어요.');
+        }
+      }
+      const res = await generateEmail(currentAssessment, { demoMode, forceLive, tone: activeTone, news });
+      const usedNews = res.source !== 'fallback' ? news : [];
+      const saved = saveDraft(currentAssessment.customer_key, 'email', res.source, res.content, refDate, {
+        model: res.source === 'live' ? res.model ?? null : null,
+        news: usedNews,
+        news_source: newsSource,
+      });
       setStorageTick(t => t + 1);
       setCurrentEmailDraft(saved);
       setEmailSubject(renderPlaceholders(res.content.subject, currentAssessment.display_name, contactName));
@@ -416,7 +440,9 @@ export default function App() {
     setIsGeneratingCall(true);
     try {
       const res = await generateCallGuide(currentAssessment, { demoMode, forceLive, tone: activeTone });
-      const saved = saveDraft(currentAssessment.customer_key, 'call', res.source, res.content, refDate, res.source === 'live' ? res.model ?? null : null);
+      const saved = saveDraft(currentAssessment.customer_key, 'call', res.source, res.content, refDate, {
+        model: res.source === 'live' ? res.model ?? null : null,
+      });
       setStorageTick(t => t + 1);
       setCurrentCallDraft(saved);
     } catch (e) {
@@ -894,6 +920,11 @@ export default function App() {
                 emailSubject={emailSubject}
                 emailBody={emailBody}
                 isGeneratingEmail={isGeneratingEmail}
+                includeNews={includeNews}
+                newsQuery={newsQuery}
+                isNewsLoading={isNewsLoading}
+                onIncludeNewsChange={setIncludeNews}
+                onNewsQueryChange={setNewsQuery}
                 isGeneratingCall={isGeneratingCall}
                 touchDate={touchDate}
                 touchChannel={touchChannel}

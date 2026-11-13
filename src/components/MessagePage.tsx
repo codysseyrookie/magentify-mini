@@ -24,6 +24,11 @@ interface MessagePageProps {
   emailSubject: string;
   emailBody: string;
   isGeneratingEmail: boolean;
+  includeNews: boolean;
+  newsQuery: string;
+  isNewsLoading: boolean;
+  onIncludeNewsChange: (v: boolean) => void;
+  onNewsQueryChange: (q: string) => void;
   isGeneratingCall: boolean;
   touchDate: string;
   touchChannel: 'email' | 'phone' | 'other';
@@ -76,6 +81,11 @@ export function MessagePage({
   emailSubject,
   emailBody,
   isGeneratingEmail,
+  includeNews,
+  newsQuery,
+  isNewsLoading,
+  onIncludeNewsChange,
+  onNewsQueryChange,
   isGeneratingCall,
   touchDate,
   touchChannel,
@@ -519,6 +529,72 @@ export function MessagePage({
             {/* EMAIL EDITOR TAB */}
             {activeTab === 'email' && (
               <div className="space-y-4">
+                {/* 업종 동향 (Liner Search API) */}
+                <div className="bento-sub p-4 space-y-3" data-testid="news-panel">
+                  <label className="flex flex-wrap items-center gap-2 text-[14px] font-semibold cursor-pointer" style={{ color: 'var(--ztd-ink)' }}>
+                    <input
+                      type="checkbox"
+                      checked={includeNews}
+                      onChange={(e) => onIncludeNewsChange(e.target.checked)}
+                      className="w-4 h-4 rounded cursor-pointer accent-[var(--ztd-ink)]"
+                    />
+                    <span>업종 동향 포함</span>
+                    <span className="text-[12px] font-normal" style={{ color: 'var(--ztd-muted)' }}>
+                      Liner Search로 최근 소식을 찾아 연락 계기로 한 문장만 반영해요
+                    </span>
+                  </label>
+
+                  {includeNews && (
+                    <div>
+                      <input
+                        type="text"
+                        value={newsQuery}
+                        maxLength={60}
+                        onChange={(e) => onNewsQueryChange(e.target.value)}
+                        aria-label="업종 동향 검색어"
+                        className="w-full h-[40px] rounded-full px-4 text-[14px]"
+                        style={{ backgroundColor: 'var(--ztd-lift)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
+                      />
+                      <p className="text-[12px] mt-1.5" style={{ color: 'var(--ztd-muted)' }}>
+                        검색어만 외부(Liner)로 전송돼요. 거래처명이나 개인정보는 넣지 마세요.
+                      </p>
+                    </div>
+                  )}
+
+                  {isNewsLoading && (
+                    <p className="text-[13px]" style={{ color: 'var(--ztd-muted)' }}>업종 동향을 찾는 중...</p>
+                  )}
+
+                  {currentEmailDraft?.news && currentEmailDraft.news.length > 0 && (
+                    <div className="space-y-2" data-testid="news-chips">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-[13px] font-semibold" style={{ color: 'var(--ztd-ink)' }}>참고한 업계 소식</span>
+                        <StatusBadge
+                          status="in_progress"
+                          label={currentEmailDraft.news_source === 'live' ? '실시간 Liner Search 응답' : 'Liner Search API 응답(저장본)'}
+                        />
+                        <span className="text-[12px]" style={{ color: 'var(--ztd-muted)' }}>제목만 참고했고, 내용은 사실 확인 전이에요</span>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        {currentEmailDraft.news.map((n) => (
+                          <a
+                            key={n.url}
+                            href={n.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 rounded-2xl px-3.5 py-2 text-[13px] transition-opacity hover:opacity-80"
+                            style={{ backgroundColor: 'var(--ztd-lift)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
+                          >
+                            <span className="font-mono text-[12px]" style={{ color: 'var(--ztd-muted)' }}>{n.hostname}</span>
+                            <span className="font-mono text-[12px]" style={{ color: 'var(--ztd-muted)' }}>{n.date}</span>
+                            <span className="font-medium">{n.title}</span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {currentEmailDraft ? (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">

@@ -1,0 +1,28 @@
+{
+  "제조업 중소기업 수주 동향 뉴스": {
+    "items": [
+      {
+        "title": "반도체가 끌고 자동차가 밀고…기업심리 기준선 넘었다",
+        "url": "https://kr.investing.com/news/stock-market-news/article-2147377",
+        "hostname": "kr.investing.com",
+        "date": "2026-10-29",
+        "description": "화학물질·제품은 이차전지와 에너지저장장치(ESS) 등의 수주 확대에 힘입어 생산과 신규수주 BSI가 각각 19p 올랐다. 제조업 중소기업 CBSI는 105.6으로 11.2p 상승했다."
+      },
+      {
+        "title": "생산·수출 줄고 일자리 증발 '기계산업 메카' 창원 빨간불",
+        "url": "https://www.mk.co.kr/news/business/12204215",
+        "hostname": "mk.co.kr",
+        "date": "2026-11-10",
+        "description": "원금은커녕 이자조차 감당하기 어려운 중소기업이 늘면서 생산·수출·고용이 동시에 위축되는 '트리플 감소'가 산업 현장을 덮치고 있다. 특히 제조업 설비투자와 ..."
+      },
+      {
+        "title": "기업 체감경기 4년여 만에 최고…반도체 온기 확산",
+        "url": "https://www.nocutnews.co.kr/news/6598825",
+        "hostname": "nocutnews.co.kr",
+        "date": "2026-10-29",
+        "description": "지난달 파업 등의 영향으로 5개월 만에 100 아래로 떨어졌던 제조업 CBSI는 지난달보다 6.1p 상승한 105.6을 기록했다. 2022년 6월(107.1) 이후 4년 4개월 만에 최고치다."
+      }
+    ],
+    "fetched_at": "2026-11-13"
+  }
+}

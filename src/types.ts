@@ -120,9 +120,19 @@ export interface TokenUsage {
   total_tokens: number | null;
 }
 
+/** 업종 동향 검색 결과 한 건 (Liner Search API, 서버에서 걸러진 값) */
+export interface NewsItem {
+  title: string;
+  url: string;
+  hostname: string;
+  /** YYYY-MM-DD */
+  date: string;
+  description: string;
+}
+
 export interface ApiLogRecord {
   id: number;
-  task: 'briefing' | 'email' | 'call';
+  task: 'briefing' | 'email' | 'call' | 'news';
   provider: 'liner' | 'gemini' | null;
   ok: boolean;
   error_code: string | null;
@@ -143,6 +153,9 @@ export interface DraftRecord {
   original_json: any;
   /** live 응답일 때 실제 응답 모델명 */
   model?: string | null;
+  /** 이 초안을 만들 때 참고한 업종 동향 기사(제목만 전달됨). 없으면 동향 없이 작성한 초안 */
+  news?: NewsItem[] | null;
+  news_source?: 'live' | 'cache' | null;
   edited_text: string;
   ref_date: string;
   created_at: string;

@@ -1,4 +1,4 @@
-import { ApiLogRecord, CustomerFlag, DraftRecord, TouchpointRecord } from './types';
+import { ApiLogRecord, CustomerFlag, DraftRecord, NewsItem, TouchpointRecord } from './types';
 
 const STORAGE_KEYS = {
   FLAGS: 'magentify_customer_flags',
@@ -29,7 +29,7 @@ export function clearApiLogs(): void {
 }
 
 export function logApiCall(entry: {
-  task: 'briefing' | 'email' | 'call';
+  task: 'briefing' | 'email' | 'call' | 'news';
   provider: 'liner' | 'gemini' | null;
   ok: boolean;
   error_code: string | null;
@@ -154,7 +154,7 @@ export function saveDraft(
   source: 'live' | 'cache' | 'fallback',
   content: any,
   refDate: string,
-  model: string | null = null
+  extra: { model?: string | null; news?: NewsItem[]; news_source?: 'live' | 'cache' | null } = {}
 ): DraftRecord {
   const drafts = getDrafts();
   const nextId = drafts.length > 0 ? Math.max(...drafts.map(d => d.id)) + 1 : 1;
@@ -166,7 +166,9 @@ export function saveDraft(
     kind,
     source,
     original_json: content,
-    model,
+    model: extra.model ?? null,
+    news: extra.news && extra.news.length > 0 ? extra.news : null,
+    news_source: extra.news && extra.news.length > 0 ? extra.news_source ?? null : null,
     edited_text: kind === 'email' ? (content?.body || '') : '',
     ref_date: refDate,
     created_at: now,

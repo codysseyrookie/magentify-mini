@@ -13,6 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { generate, getStatus } from '../api/_llm.ts';
+import { searchNews } from '../api/_news.ts';
+import { DEFAULT_NEWS_QUERY, fetchNews } from '../src/news.ts';
+import type { NewsItem } from '../src/types.ts';
 import { analyze, buildClean, prioritize, suggestMapping, summarize } from '../src/analysis.ts';
 import { DEMO_CSV_DATA, parseCSV } from '../src/demoData.ts';
 import {
@@ -48,6 +51,11 @@ if (status.provider !== 'liner') {
 const realFetch = globalThis.fetch;
 // 앱의 llm.ts가 호출하는 /api/llm/generate를 같은 프로세스의 서버 로직으로 연결한다.
 globalThis.fetch = (async (url: any, init: any) => {
+  if (String(url).includes('/api/llm/news')) {
+    const body = JSON.parse(init.body);
+    const r = await searchNews(body.query, process.env, realFetch as any);
+    return { ok: r.status < 400, status: r.status, json: async () => r.body } as any;
+  }
   if (String(url).includes('/api/llm/generate')) {
     const body = JSON.parse(init.body);
     const r = await generate(body.systemPrompt, body.userPrompt, process.env, realFetch as any);
@@ -93,6 +101,35 @@ for (const a of assessments) {
     await ensure(callCacheKey(a, tone), () => generateCallGuide(a, { ...liveOpts, tone }));
   }
 }
+
+// 업종 동향: Liner Search로 기사를 받아 public/cache/news-cache.json에 저장하고,
+// 우선 확인 거래처의 이메일을 그 기사를 참고해 다시 만들어 저장본에 넣는다.
+const NEWS_OUT = path.resolve(process.cwd(), 'public/cache/news-cache.json');
+const newsCache: Record<string, { items: NewsItem[]; fetched_at: string }> = fs.existsSync(NEWS_OUT)
+  ? JSON.parse(fs.readFileSync(NEWS_OUT, 'utf8'))
+  : {};
+if (!newsCache[DEFAULT_NEWS_QUERY] || force) {
+  const nr = await fetchNews(DEFAULT_NEWS_QUERY, { demoMode: false, forceLive: true });
+  if (nr.items.length > 0) {
+    newsCache[DEFAULT_NEWS_QUERY] = { items: nr.items, fetched_at: new Date().toISOString().slice(0, 10) };
+    console.log(`저장: 업종 동향 ${nr.items.length}건 (${DEFAULT_NEWS_QUERY})`);
+    nr.items.forEach(i => console.log(`  - ${i.date} ${i.hostname} ${i.title}`));
+  } else {
+    failed++;
+    console.log(`실패(저장 안 함): 업종 동향 -> ${nr.error_code}`);
+  }
+}
+const demoNews = newsCache[DEFAULT_NEWS_QUERY]?.items ?? [];
+if (demoNews.length > 0) {
+  for (const a of priority.slice(0, 4)) {
+    const tones: MessageTone[] = toneMode === 'all' ? ALL_TONES : ['정중하게'];
+    for (const tone of tones) {
+      await ensure(emailCacheKey(a, tone, demoNews), () => generateEmail(a, { ...liveOpts, tone, news: demoNews }));
+    }
+  }
+}
+fs.mkdirSync(path.dirname(NEWS_OUT), { recursive: true });
+fs.writeFileSync(NEWS_OUT, JSON.stringify(newsCache, null, 2) + '\n', 'utf8');
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, JSON.stringify(cache, null, 2) + '\n', 'utf8');

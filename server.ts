@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { generate, getStatus } from './api/_llm.ts';
+import { searchNews } from './api/_news.ts';
 
 dotenv.config();
 
@@ -26,6 +27,12 @@ async function startServer() {
   app.post('/api/llm/generate', async (req, res) => {
     const { systemPrompt, userPrompt, strategy } = req.body || {};
     const result = await generate(systemPrompt, userPrompt, process.env, undefined, undefined, strategy);
+    res.status(result.status).json(result.body);
+  });
+
+  // 업종 동향 검색 (Liner Search API)
+  app.post('/api/llm/news', async (req, res) => {
+    const result = await searchNews((req.body || {}).query);
     res.status(result.status).json(result.body);
   });
 

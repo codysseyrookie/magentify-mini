@@ -1,7 +1,7 @@
 import type { ApiLogRecord } from './types';
 
 export interface TaskStat {
-  task: 'briefing' | 'email' | 'call';
+  task: ApiLogRecord['task'];
   calls: number;
   ok: number;
   avgLatencyMs: number | null;
@@ -24,7 +24,7 @@ export interface ApiStats {
   errors: Record<string, number>;
 }
 
-const TASKS: TaskStat['task'][] = ['briefing', 'email', 'call'];
+const TASKS: TaskStat['task'][] = ['briefing', 'email', 'call', 'news'];
 
 function avg(values: number[]): number | null {
   return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null;
@@ -83,6 +83,7 @@ export const TASK_LABEL: Record<TaskStat['task'], string> = {
   briefing: '주간 브리핑',
   email: '이메일 초안',
   call: '통화 가이드',
+  news: '업종 동향 검색',
 };
 
 export const STRATEGY_LABEL: Record<string, string> = {
@@ -101,4 +102,5 @@ export const ERROR_LABEL: Record<string, string> = {
   network: '연결 실패',
   invalid_json: 'JSON 형식 오류',
   rule_violation: '검증 위반(재요청)',
+  empty: '검색 결과 없음',
 };
