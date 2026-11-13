@@ -45,11 +45,12 @@ if (status.provider !== 'liner') {
   process.exit(2);
 }
 
+const realFetch = globalThis.fetch;
 // 앱의 llm.ts가 호출하는 /api/llm/generate를 같은 프로세스의 서버 로직으로 연결한다.
 globalThis.fetch = (async (url: any, init: any) => {
   if (String(url).includes('/api/llm/generate')) {
     const body = JSON.parse(init.body);
-    const r = await generate(body.systemPrompt, body.userPrompt);
+    const r = await generate(body.systemPrompt, body.userPrompt, process.env, realFetch as any);
     return { ok: r.status < 400, status: r.status, json: async () => r.body } as any;
   }
   throw new Error('unexpected fetch: ' + url);

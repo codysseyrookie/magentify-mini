@@ -107,6 +107,19 @@ export function validate(
     }
   }
 
+  // 브리핑: 영어 필드명 노출과 headline/caution 내 별칭 사용 금지
+  if (task === 'briefing') {
+    const prose = [content.headline, content.caution, ...(Array.isArray(content.items) ? content.items.map((it: any) => it?.reason) : [])]
+      .filter(s => typeof s === 'string')
+      .join('\n');
+    if (/\b(gap|median|ratio|high_risk|attention|risk|normal|hold)\b/i.test(prose)) {
+      violations.push('영어 필드명이 문장에 포함되어 있습니다.');
+    }
+    if (/\bC\d{2}\b/.test(`${content.headline ?? ''} ${content.caution ?? ''}`)) {
+      violations.push('headline/caution에 별칭이 포함되어 있습니다.');
+    }
+  }
+
   // Forbidden words check
   const dumpedStr = JSON.stringify(content);
   for (const word of FORBIDDEN_WORDS) {
@@ -370,7 +383,7 @@ export async function runTask<T>(p: RunTaskParams<T>): Promise<LlmResult<T>> {
 }
 
 export function briefingCacheKey(top: Assessment[]): string {
-  return `briefing_${top.slice(0, 4).map(t => `:${t.gap_days}`).join('_')}`;
+  return `briefing_${top.slice(0, 4).map(t => `${t.customer_key}:${t.gap_days}`).join('_')}`;
 }
 
 export function emailCacheKey(a: Assessment, tone: MessageTone = '정중하게'): string {
@@ -398,10 +411,13 @@ export async function generateBriefing(
 2. 이탈, 손실, 거래 중단을 확정하는 표현을 쓰지 않는다.
 3. ${NUMBER_RULE}
 4. 한국어 존댓말을 사용한다.
-5. 출력은 순수 JSON으로만 응답하라:
+5. 영어 필드명(gap, median, ratio, high_risk, attention 등)을 문장에 쓰지 말고 '공백 일수', '평소 간격', '배수', '이탈 위험 후보'처럼 자연스러운 한국어로 쓴다.
+6. headline과 caution에는 별칭(C01 등)을 쓰지 않는다. 별칭은 items의 id에만 쓴다.
+7. 출력은 순수 JSON으로만 응답하라:
 {"headline": "60자 이내 요약", "items": [{"id": "별칭", "reason": "80자 이내 근거", "action": "email 또는 call", "tone": "정중 또는 가벼운 안부"}], "caution": "한 문장 주의사항"}`;
 
-  const userPrompt = `분석 요약: ${JSON.stringify(summary)}\n우선 거래처: ${JSON.stringify(top4.map(a => ({ id: a.alias, status: a.status, vip: a.vip, gap: a.gap_days, median: a.median_interval, ratio: a.ratio })))}`;
+  const STATUS_KO: Record<string, string> = { normal: '정상', attention: '관심 필요', risk: '이탈 위험 후보', high_risk: '고위험 후보', hold: '판단 보류' };
+  const userPrompt = `분석 요약(거래처 수): ${JSON.stringify({ 정상: summary.normal, 관심필요: summary.attention, 위험후보: summary.risk, 고위험후보: summary.high_risk, 판단보류: summary.hold })}\n우선 거래처: ${JSON.stringify(top4.map(a => ({ id: a.alias, 상태: STATUS_KO[a.status] || a.status, VIP: a.vip, 공백일수: a.gap_days, 평소간격일수: a.median_interval, 배수: a.ratio })))}`;
 
   return runTask<BriefingContent>({
     task: 'briefing',

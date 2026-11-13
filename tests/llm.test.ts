@@ -244,3 +244,17 @@ describe('LLM 호출 계층: 폴백·재요청·캐시 (PRD F12)', () => {
     expect(r2.source).toBe('fallback');
   });
 });
+
+describe('브리핑 문장 품질 검증', () => {
+  const base = { items: [{ id: 'C01', reason: '공백 일수는 63일입니다.' }] };
+  it('영어 필드명(gap, median, ratio, high_risk)이 문장에 있으면 위반', () => {
+    const v = validate('briefing', { ...base, headline: '확인 필요', caution: 'high_risk 거래처 주의' });
+    expect(v.some(x => x.includes('영어 필드명'))).toBe(true);
+    const v2 = validate('briefing', { headline: 'h', caution: 'c', items: [{ id: 'C01', reason: 'gap 63이 median 30' }] });
+    expect(v2.some(x => x.includes('영어 필드명'))).toBe(true);
+  });
+  it('headline/caution에 별칭(C01)이 있으면 위반, items의 id는 허용', () => {
+    expect(validate('briefing', { ...base, headline: 'C01 먼저 확인', caution: '주의' }).some(x => x.includes('별칭'))).toBe(true);
+    expect(validate('briefing', { ...base, headline: '우선 거래처를 확인하세요', caution: '단정하지 마세요' })).toEqual([]);
+  });
+});

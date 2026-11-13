@@ -30,6 +30,9 @@
 - API 키 발급: https://platform.liner.com/keys
 - 키 확인(무료): `GET https://platform.liner.com/api/v1/credits/balance` (헤더 `x-api-key`)
 
-## 남은 확인 사항
+## 확인 결과 (2026-11-13 업데이트)
 
-`DEMO_MODE`, `REF_DATE_DEFAULT`, 일일 한도 숫자는 앱의 코드, README, `.env.example`에서 확인해야 합니다.
+- `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH`: 현재 구현(React/Express)에서는 사용하지 않는다. 이전 Streamlit 계획의 이름이 `.env.example`에 남아 있다. 기준일과 데모 모드는 설정 화면에서 변경한다.
+- `LINER_DAILY_LIMIT`: Liner 문서에 숫자가 없는 **앱 자체 사용량 제한**이다(기본 200). 서버 인스턴스 단위로 집계한다.
+- `LINER_TIMEOUT_SEC`: 앱 설정값(기본 20초). Model API 브리핑 호출은 실측 약 5초였다. (Search Agent API의 중앙값 30초는 별개 제품 기준)
+- 실제 호출 확인: `https://platform.liner.com/api/v1/chat/completions` + `liner-gpt-router` + `Authorization: Bearer` 헤더로 성공. `x-api-key` 헤더도 동작했지만 앱은 Bearer를 쓴다. 크레딧 조회(`/credits/balance`)와 모델 목록(`/models`)도 응답했다.

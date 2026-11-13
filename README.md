@@ -112,18 +112,22 @@ npm run dev                 # http://localhost:3000
 
 영상 중 1회는 **새로 생성**을 눌러 실제 API 호출을 보여 준다. 키가 없는 환경에서는 "기본 템플릿" 라벨이 표시되며, 저장본이나 실시간 응답으로 위장하지 않는다.
 
-### 응답 저장본 만들기 (심사자가 키 없이도 볼 수 있게)
+### 응답 저장본 (심사자가 키 없이도 볼 수 있게)
+
+`public/cache/llm-cache.json`에 실제 Liner Model API 응답 41건(브리핑 1, 12개 거래처의 이메일·통화 가이드, 우선 확인 4곳은 3가지 톤)이 포함되어 있다. 2026-11-13에 생성했고, 가상 거래처 요약 수치만 전송했다. 검증(스키마, 금지어, 입력 외 숫자, 영어 필드명 노출)을 통과한 응답만 저장한다.
 
 ```bash
 # .env에 LINER_API_KEY를 넣은 뒤
-npm run cache:generate          # public/cache/llm-cache.json 생성 (검증을 통과한 live 응답만 저장)
+npm run cache:generate              # 없는 항목만 생성 (약 8분, 호출당 약 5~10초)
 npm run cache:generate -- --force   # 전체 다시 생성
 ```
+
+프롬프트나 분석 값이 바뀌면 캐시 키(거래처, 공백 일수, 배수, 톤)가 달라질 수 있으므로 다시 생성한다.
 
 ## 7. 테스트
 
 ```bash
-npm test            # vitest 65개
+npm test            # vitest 67개
 npm run lint        # tsc --noEmit
 npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 ```
@@ -131,7 +135,7 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | 파일 | 내용 |
 | :--- | :--- |
 | `tests/golden.test.ts` | 데모 126행, 품질 검사 카운트(123/1/1/1/0), 12개 거래처의 거래일 수·평소 간격·공백·배수·상태, 요약 카운트, 우선순위 순서, 키 정규화 |
-| `tests/llm.test.ts` | 금지어, 스키마 누락, 입력에 없는 숫자, 브리핑 id 집합, 키 없음·타임아웃·잘못된 JSON·위반 시 폴백, 재요청, 저장본 사용, "새로 생성" 실패를 live로 위장하지 않는지 |
+| `tests/llm.test.ts` | 금지어, 스키마 누락, 입력에 없는 숫자, 브리핑 id 집합과 문장 품질(영어 필드명·별칭 노출 금지), 키 없음·타임아웃·잘못된 JSON·위반 시 폴백, 재요청, 저장본 사용, "새로 생성" 실패를 live로 위장하지 않는지 |
 | `tests/server_llm.test.ts` | Liner 주소 보정, 공급자 우선순위, 재시도 정책, 401 시 재시도 없음과 키 비노출, 타임아웃, 일일 한도 |
 | `tests/vercel_handlers.test.ts` | Vercel 함수의 메서드·본문·키 없음 처리 |
 
@@ -156,9 +160,35 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | 구분 | 내용 |
 | :--- | :--- |
 | 기존(프로토타입) | 화면 5개, 분석 로직(`src/analysis.ts`), localStorage 저장, 데모 데이터, 기획서·PRD 문서 |
-| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, vitest 65개, 키 검사 스크립트, 이 README |
+| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, vitest 67개, 키 검사 스크립트, 응답 저장본 41건, 이 README |
 
-## 11. 문서
+## 11. 확인된 사실 (2026-11-13 기준)
+
+- Liner Model API 연결 확인: `https://platform.liner.com/api/v1/chat/completions`, 모델 `liner-gpt-router`, 인증 `Authorization: Bearer` 방식으로 호출 성공. 브리핑 1회 응답 시간 약 5.3초(기본 타임아웃 20초 안).
+- 앱에서 **새로 생성**을 눌렀을 때 "실시간 AI 응답" 라벨과 호출 로그(공급자 liner, 성공)가 남는 것을 확인했다.
+- 키가 없는 환경에서는 "기본 템플릿" 라벨이 표시되고, 저장본이 있으면 "Liner Model API 응답(저장본)"으로 표시된다.
+- 후속 조치 예정 현황은 **거래처 화면 하단과 알림 벨**에 표시된다(접촉 기록 저장 즉시 반영). 개요 화면에는 별도 표가 없다.
+- 주문 간격 차트는 애니메이션 종료 후 정상 표시된다.
+
+## 12. PRD v1.1 대비 변경 사항
+
+PRD v1.1은 Streamlit/Python 기준으로 쓰였다. 구현은 아래처럼 바뀌었고, 기능 범위와 판정 규칙(4장)은 그대로다.
+
+| 항목 | PRD v1.1 | 현재 구현 |
+| :--- | :--- | :--- |
+| 스택 | Python, Streamlit, pandas, sqlite3, pytest | React, Vite, TypeScript, Express(로컬), Vercel 서버리스 함수, vitest |
+| 화면 | 3개(데이터, 대시보드, 거래처) | 5개(개요, 거래처, 문안, 가져오기, 설정). 문안 작성과 접촉 기록은 "문안" 화면 |
+| 저장 | SQLite(`data/app.db`) | 브라우저 localStorage(플래그, 초안, 접촉 기록, API 로그). 서버에 거래 데이터 저장 없음 |
+| 응답 캐시 | `data/cache/*.json` | `public/cache/llm-cache.json`(저장소 포함) + 브라우저 localStorage |
+| 배포 | 제외 | Vercel(서버리스 함수로 LLM 호출) |
+| LLM 호출 | openai SDK, base_url 교체 | 서버에서 fetch로 OpenAI 호환 `chat/completions` 호출. 브라우저에는 키 비노출 |
+| 환경변수 | `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH` | 현재 사용하지 않음(설정 화면에서 변경). `LINER_*`, `GEMINI_API_KEY`만 사용 |
+| 테스트 | `test_golden.py`, `test_llm_validate.py` | `tests/*.test.ts` (golden, llm, server_llm, vercel_handlers) |
+| 추가된 검증 | 금지어, 입력 외 숫자 | + 브리핑의 영어 필드명 노출 금지, headline/caution의 별칭 노출 금지 |
+| 우선 확인 순서 | 대성정밀, 우리테크, 동양프레스, 세진금속 | 동일(골든 테스트로 고정) |
+| 미구현(P1) | 질문하기, 업종 동향 | 미구현(PRD 8장 판단 시점에 따라 11/21에 결정) |
+
+## 13. 문서
 
 - `public/assets/aistudio/Magentify_Mini___2________PRD__v1.1_*.md`: 2주 데모 중심 PRD v1.1 (기준 명세)
 - `public/assets/aistudio/liner-env-vars-guide_*.md`: Liner 환경변수와 문서 위치 정리
