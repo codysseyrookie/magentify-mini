@@ -79,12 +79,12 @@ magentify-mini/
 ```bash
 git clone <저장소 URL>
 cd magentify-mini
-npm install --legacy-peer-deps
+npm install                 # .npmrc에 legacy-peer-deps가 설정되어 있다
 cp .env.example .env        # 키는 .env에만 넣는다 (저장소에서 제외됨)
 npm run dev                 # http://localhost:3000
 ```
 
-> `--legacy-peer-deps`가 필요한 이유: vite 8이 esbuild 0.27 이상을 선택 의존성으로 요구하는데, 프로젝트가 esbuild 0.25를 쓰고 있어 peer 충돌이 난다.
+> `.npmrc`의 `legacy-peer-deps=true`가 필요한 이유: vite 8이 esbuild 0.27 이상을 선택 의존성으로 요구하는데, 프로젝트가 esbuild 0.25를 쓰고 있어 peer 충돌이 난다.
 
 ### 환경변수 (`.env`)
 
