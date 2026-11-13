@@ -398,7 +398,7 @@ export default function App() {
     setIsGeneratingEmail(true);
     try {
       const res = await generateEmail(currentAssessment, { demoMode, forceLive, tone: activeTone });
-      const saved = saveDraft(currentAssessment.customer_key, 'email', res.source, res.content, refDate);
+      const saved = saveDraft(currentAssessment.customer_key, 'email', res.source, res.content, refDate, res.source === 'live' ? res.model ?? null : null);
       setStorageTick(t => t + 1);
       setCurrentEmailDraft(saved);
       setEmailSubject(renderPlaceholders(res.content.subject, currentAssessment.display_name, contactName));
@@ -416,7 +416,7 @@ export default function App() {
     setIsGeneratingCall(true);
     try {
       const res = await generateCallGuide(currentAssessment, { demoMode, forceLive, tone: activeTone });
-      const saved = saveDraft(currentAssessment.customer_key, 'call', res.source, res.content, refDate);
+      const saved = saveDraft(currentAssessment.customer_key, 'call', res.source, res.content, refDate, res.source === 'live' ? res.model ?? null : null);
       setStorageTick(t => t + 1);
       setCurrentCallDraft(saved);
     } catch (e) {

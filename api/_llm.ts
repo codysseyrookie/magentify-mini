@@ -12,9 +12,31 @@ export interface ServerStatus {
   provider: LlmProvider;
 }
 
+/** Liner Router 전략: cost(비용 우선), balanced(기본), quality(품질 우선) */
+export type RoutingStrategy = 'cost' | 'balanced' | 'quality';
+
+export interface UsageInfo {
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+}
+
 export interface GenerateResult {
   status: number;
-  body: { text?: string; provider?: LlmProvider; error?: string; code?: string };
+  body: {
+    text?: string;
+    provider?: LlmProvider;
+    /** 실제로 응답한 모델(라우터가 고른 모델) */
+    model?: string;
+    usage?: UsageInfo;
+    strategy?: RoutingStrategy;
+    error?: string;
+    code?: string;
+  };
+}
+
+export function parseStrategy(v: unknown): RoutingStrategy | undefined {
+  return v === 'cost' || v === 'balanced' || v === 'quality' ? v : undefined;
 }
 
 type Env = Record<string, string | undefined>;
@@ -87,8 +109,9 @@ async function callLinerOnce(
   env: Env,
   systemPrompt: string,
   userPrompt: string,
-  fetchImpl: FetchLike
-): Promise<{ ok: true; text: string } | { ok: false; status: number | null; aborted: boolean }> {
+  fetchImpl: FetchLike,
+  strategy?: RoutingStrategy
+): Promise<{ ok: true; text: string; model?: string; usage?: UsageInfo } | { ok: false; status: number | null; aborted: boolean }> {
   const timeoutSec = Number(env.LINER_TIMEOUT_SEC) > 0 ? Number(env.LINER_TIMEOUT_SEC) : 20;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
@@ -107,13 +130,22 @@ async function callLinerOnce(
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.2,
+        ...(strategy ? { routing_strategy: strategy } : {}),
       }),
     });
     if (!res.ok) return { ok: false, status: res.status, aborted: false };
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content;
     if (typeof text !== 'string' || !text.trim()) return { ok: false, status: 502, aborted: false };
-    return { ok: true, text };
+    const u = data?.usage;
+    const usage: UsageInfo | undefined = u
+      ? {
+          prompt_tokens: typeof u.prompt_tokens === 'number' ? u.prompt_tokens : null,
+          completion_tokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : null,
+          total_tokens: typeof u.total_tokens === 'number' ? u.total_tokens : null,
+        }
+      : undefined;
+    return { ok: true, text, model: typeof data?.model === 'string' ? data.model : undefined, usage };
   } catch (err: any) {
     return { ok: false, status: null, aborted: err?.name === 'AbortError' };
   } finally {
@@ -127,12 +159,15 @@ async function generateWithLiner(
   systemPrompt: string,
   userPrompt: string,
   fetchImpl: FetchLike,
-  retryDelayMs: number
+  retryDelayMs: number,
+  strategy?: RoutingStrategy
 ): Promise<GenerateResult> {
   let last: { status: number | null; aborted: boolean } = { status: null, aborted: false };
   for (let attempt = 0; attempt < 2; attempt++) {
-    const r = await callLinerOnce(key, env, systemPrompt, userPrompt, fetchImpl);
-    if (r.ok) return { status: 200, body: { text: r.text, provider: 'liner' } };
+    const r = await callLinerOnce(key, env, systemPrompt, userPrompt, fetchImpl, strategy);
+    if (r.ok) {
+      return { status: 200, body: { text: r.text, provider: 'liner', model: r.model, usage: r.usage, strategy } };
+    }
     last = { status: r.status, aborted: r.aborted };
     if (!isRetryable(r.status, r.aborted)) break;
     if (attempt === 0) await sleep(retryDelayMs);
@@ -159,7 +194,7 @@ async function generateWithGemini(key: string, systemPrompt: string, userPrompt:
         temperature: 0.2,
       },
     });
-    return { status: 200, body: { text: response.text || '', provider: 'gemini' } };
+    return { status: 200, body: { text: response.text || '', provider: 'gemini', model: 'gemini-3.8-flash' } };
   } catch (err: any) {
     return { status: 502, body: { error: 'Gemini call failed', code: 'server' } };
   }
@@ -170,7 +205,8 @@ export async function generate(
   userPrompt: string,
   env: Env = process.env,
   fetchImpl: FetchLike = fetch as unknown as FetchLike,
-  retryDelayMs = 1500
+  retryDelayMs = 1500,
+  strategy?: unknown
 ): Promise<GenerateResult> {
   if (typeof systemPrompt !== 'string' || typeof userPrompt !== 'string' || !userPrompt) {
     return { status: 400, body: { error: 'systemPrompt/userPrompt required', code: 'bad_request' } };
@@ -184,7 +220,7 @@ export async function generate(
     return { status: 429, body: { error: 'Daily live-call limit reached', code: 'limit' } };
   }
   if (provider === 'liner') {
-    return generateWithLiner(env.LINER_API_KEY as string, env, systemPrompt, userPrompt, fetchImpl, retryDelayMs);
+    return generateWithLiner(env.LINER_API_KEY as string, env, systemPrompt, userPrompt, fetchImpl, retryDelayMs, parseStrategy(strategy));
   }
   return generateWithGemini(env.GEMINI_API_KEY as string, systemPrompt, userPrompt);
 }

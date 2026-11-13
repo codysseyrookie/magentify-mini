@@ -7,7 +7,7 @@ export default async function handler(req: any, res: any) {
     return;
   }
   const body = typeof req.body === 'string' ? safeParse(req.body) : req.body || {};
-  const result = await generate(body.systemPrompt, body.userPrompt);
+  const result = await generate(body.systemPrompt, body.userPrompt, process.env, undefined, undefined, body.strategy);
   res.status(result.status).json(result.body);
 }
 

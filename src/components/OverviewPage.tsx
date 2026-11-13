@@ -505,7 +505,7 @@ export function OverviewPage({
                 <span className="status-badge status-badge--progress">
                   <span className="status-badge-dot" aria-hidden="true" />
                   {briefing.source === 'live'
-                    ? `실시간 AI 응답 (${briefing.latency_ms || 500}ms)`
+                    ? `실시간 AI 응답 (${briefing.latency_ms ?? 0}ms${briefing.model ? ` · ${briefing.model}` : ''})`
                     : briefing.source === 'cache'
                     ? 'Liner Model API 응답(저장본)'
                     : '기본 템플릿'}

@@ -105,6 +105,19 @@ export interface LlmResult<T = any> {
   error_code: string | null;
   /** live 응답을 만든 공급자 (live일 때만) */
   provider?: 'liner' | 'gemini' | null;
+  /** 라우터가 실제로 고른 모델명 (live일 때만) */
+  model?: string | null;
+  /** 요청한 Router 전략 */
+  strategy?: RoutingStrategy | null;
+  usage?: TokenUsage | null;
+}
+
+export type RoutingStrategy = 'cost' | 'balanced' | 'quality';
+
+export interface TokenUsage {
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
 }
 
 export interface ApiLogRecord {
@@ -115,6 +128,11 @@ export interface ApiLogRecord {
   error_code: string | null;
   latency_ms: number | null;
   created_at: string;
+  model?: string | null;
+  strategy?: RoutingStrategy | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
 }
 
 export interface DraftRecord {
@@ -123,6 +141,8 @@ export interface DraftRecord {
   kind: 'email' | 'call';
   source: 'live' | 'cache' | 'fallback';
   original_json: any;
+  /** live 응답일 때 실제 응답 모델명 */
+  model?: string | null;
   edited_text: string;
   ref_date: string;
   created_at: string;

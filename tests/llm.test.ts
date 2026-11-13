@@ -9,6 +9,7 @@ import {
   generateCallGuide,
   generateEmail,
   renderPlaceholders,
+  STRATEGY_BY_TASK,
   validate,
 } from '../src/llm';
 import { prioritize, summarize } from '../src/analysis';
@@ -256,5 +257,36 @@ describe('브리핑 문장 품질 검증', () => {
   it('headline/caution에 별칭(C01)이 있으면 위반, items의 id는 허용', () => {
     expect(validate('briefing', { ...base, headline: 'C01 먼저 확인', caution: '주의' }).some(x => x.includes('별칭'))).toBe(true);
     expect(validate('briefing', { ...base, headline: '우선 거래처를 확인하세요', caution: '단정하지 마세요' })).toEqual([]);
+  });
+});
+
+describe('작업별 Router 전략 (STRATEGY_BY_TASK)', () => {
+  it('브리핑은 비용 우선, 이메일·통화 가이드는 품질 우선으로 정해져 있다', () => {
+    expect(STRATEGY_BY_TASK).toEqual({ briefing: 'cost', email: 'quality', call: 'quality' });
+  });
+
+  it('이메일 호출은 quality를 서버에 보내고, 응답 모델과 토큰을 결과에 담는다', async () => {
+    const f = mockFetchSequence([
+      {
+        ok: true,
+        json: {
+          text: okEmailJson(),
+          provider: 'liner',
+          model: 'gpt-6.1-sol',
+          usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+        },
+      },
+    ]);
+    const r = await generateEmail(daeseong(), { demoMode: false });
+    expect(JSON.parse((f.mock.calls[0][1] as any).body).strategy).toBe('quality');
+    expect(r.model).toBe('gpt-6.1-sol');
+    expect(r.strategy).toBe('quality');
+    expect(r.usage?.total_tokens).toBe(30);
+  });
+
+  it('options.strategy로 호출 단위 전략을 바꿀 수 있다', async () => {
+    const f = mockFetchSequence([{ ok: true, json: { text: okEmailJson(), provider: 'liner', model: 'gpt-6-luna' } }]);
+    await generateEmail(daeseong(), { demoMode: false, strategy: 'cost' } as any);
+    expect(JSON.parse((f.mock.calls[0][1] as any).body).strategy).toBe('cost');
   });
 });

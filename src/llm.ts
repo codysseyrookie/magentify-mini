@@ -7,6 +7,7 @@ import {
   SummaryCounts
 } from './types';
 import { logApiCall } from './storage';
+import type { RoutingStrategy, TokenUsage } from './types';
 
 export const FORBIDDEN_WORDS = [
   '확정',
@@ -283,16 +284,24 @@ class LlmCallError extends Error {
   }
 }
 
+interface ServerLlmResponse {
+  text: string;
+  provider: 'liner' | 'gemini' | null;
+  model: string | null;
+  usage: TokenUsage | null;
+}
+
 async function callServerLLMAPI(
   systemPrompt: string,
-  userPrompt: string
-): Promise<{ text: string; provider: 'liner' | 'gemini' | null }> {
+  userPrompt: string,
+  strategy?: RoutingStrategy
+): Promise<ServerLlmResponse> {
   let res: Response;
   try {
     res = await fetch('/api/llm/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemPrompt, userPrompt }),
+      body: JSON.stringify({ systemPrompt, userPrompt, strategy }),
     });
   } catch {
     throw new LlmCallError('서버에 연결할 수 없습니다.', 'network');
@@ -307,7 +316,12 @@ async function callServerLLMAPI(
   }
 
   const data = await res.json();
-  return { text: data.text || '', provider: data.provider === 'gemini' ? 'gemini' : data.provider === 'liner' ? 'liner' : null };
+  return {
+    text: data.text || '',
+    provider: data.provider === 'gemini' ? 'gemini' : data.provider === 'liner' ? 'liner' : null,
+    model: typeof data.model === 'string' ? data.model : null,
+    usage: data.usage && typeof data.usage === 'object' ? data.usage : null,
+  };
 }
 
 export function cleanJsonResponse(rawText: string): any {
@@ -325,8 +339,20 @@ interface RunTaskParams<T> {
   systemPrompt: string;
   userPrompt: string;
   allowedIds?: Set<string>;
-  options: { demoMode: boolean; forceLive?: boolean };
+  options: { demoMode: boolean; forceLive?: boolean; strategy?: RoutingStrategy };
 }
+
+/**
+ * 작업별 Liner Router 전략.
+ * - 브리핑: 요약 수준이라 비용 우선(작은 모델)
+ * - 이메일·통화 가이드: 고객에게 나가는 문안이라 품질 우선(큰 모델)
+ * options.strategy로 호출 단위로 바꿀 수 있다.
+ */
+export const STRATEGY_BY_TASK: Record<'briefing' | 'email' | 'call', RoutingStrategy> = {
+  briefing: 'cost',
+  email: 'quality',
+  call: 'quality',
+};
 
 /**
  * 공통 실행 순서 (PRD 6.3):
@@ -343,6 +369,7 @@ export async function runTask<T>(p: RunTaskParams<T>): Promise<LlmResult<T>> {
     }
   }
 
+  const strategy: RoutingStrategy = options.strategy ?? STRATEGY_BY_TASK[task];
   const allowedNumbers = buildAllowedNumbers(userPrompt);
   let prompt = userPrompt;
   let lastCode = 'unknown';
@@ -350,24 +377,41 @@ export async function runTask<T>(p: RunTaskParams<T>): Promise<LlmResult<T>> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const started = performance.now();
     try {
-      const { text, provider } = await callServerLLMAPI(systemPrompt, prompt);
+      const { text, provider, model, usage } = await callServerLLMAPI(systemPrompt, prompt, strategy);
       const latency = Math.round(performance.now() - started);
+      const meta = {
+        provider,
+        model,
+        strategy: provider === 'liner' ? strategy : null,
+        prompt_tokens: usage?.prompt_tokens ?? null,
+        completion_tokens: usage?.completion_tokens ?? null,
+        total_tokens: usage?.total_tokens ?? null,
+      };
       let parsed: any;
       try {
         parsed = cleanJsonResponse(text);
       } catch {
-        logApiCall({ task, ok: false, error_code: 'invalid_json', latency_ms: latency, provider });
+        logApiCall({ task, ok: false, error_code: 'invalid_json', latency_ms: latency, ...meta });
         lastCode = 'invalid_json';
         prompt = `${userPrompt}\n\n[이전 응답 오류] JSON으로 파싱할 수 없었습니다. 설명 없이 순수 JSON 객체만 다시 출력하세요.`;
         continue;
       }
       const violations = validate(task, parsed, allowedNumbers, allowedIds);
       if (violations.length === 0) {
-        logApiCall({ task, ok: true, error_code: null, latency_ms: latency, provider });
+        logApiCall({ task, ok: true, error_code: null, latency_ms: latency, ...meta });
         setCachedResult(cacheKey, parsed);
-        return { content: parsed as T, source: 'live', latency_ms: latency, error_code: null, provider };
+        return {
+          content: parsed as T,
+          source: 'live',
+          latency_ms: latency,
+          error_code: null,
+          provider,
+          model,
+          strategy: meta.strategy,
+          usage,
+        };
       }
-      logApiCall({ task, ok: false, error_code: 'rule_violation', latency_ms: latency, provider });
+      logApiCall({ task, ok: false, error_code: 'rule_violation', latency_ms: latency, ...meta });
       lastCode = 'rule_violation';
       prompt = `${userPrompt}\n\n[이전 응답 위반 사항] ${violations.join(' / ')}\n위 사항을 고쳐 JSON으로만 다시 작성하세요.`;
     } catch (err: any) {

@@ -143,3 +143,40 @@ describe('generate: Liner 호출', () => {
     expect(f).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('generate: Router 전략과 응답 메타데이터', () => {
+  const env = { LINER_API_KEY: SECRET };
+  const ok = (model: string) =>
+    res(true, 200, {
+      model,
+      choices: [{ message: { content: '{"a":1}' } }],
+      usage: { prompt_tokens: 67, completion_tokens: 27, total_tokens: 94 },
+    });
+
+  it('strategy가 있으면 routing_strategy로 전달하고, 응답 모델과 토큰을 돌려준다', async () => {
+    const f = vi.fn().mockResolvedValue(ok('gpt-6-luna'));
+    const r = await generate('s', 'u', env, f as any, 0, 'cost');
+    const body = JSON.parse(f.mock.calls[0][1].body);
+    expect(body.routing_strategy).toBe('cost');
+    expect(r.body.model).toBe('gpt-6-luna');
+    expect(r.body.strategy).toBe('cost');
+    expect(r.body.usage).toEqual({ prompt_tokens: 67, completion_tokens: 27, total_tokens: 94 });
+  });
+
+  it('strategy가 없거나 잘못된 값이면 routing_strategy를 보내지 않는다', async () => {
+    for (const s of [undefined, 'bogus', 123]) {
+      const f = vi.fn().mockResolvedValue(ok('gpt-6.1-terra'));
+      const r = await generate('s', 'u', env, f as any, 0, s);
+      expect(JSON.parse(f.mock.calls[0][1].body)).not.toHaveProperty('routing_strategy');
+      expect(r.body.strategy).toBeUndefined();
+      __resetDailyCounterForTest();
+    }
+  });
+
+  it('usage가 없는 응답도 정상 처리한다', async () => {
+    const f = vi.fn().mockResolvedValue(res(true, 200, { model: 'm', choices: [{ message: { content: 'x' } }] }));
+    const r = await generate('s', 'u', env, f as any, 0, 'quality');
+    expect(r.status).toBe(200);
+    expect(r.body.usage).toBeUndefined();
+  });
+});

@@ -20,12 +20,25 @@ export function getApiLogs(): ApiLogRecord[] {
 }
 
 /** live 호출을 시도할 때마다 1건 기록한다(캐시 적중은 기록하지 않는다). 데모 리셋으로 지워지지 않는다. */
+export function clearApiLogs(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.API_LOGS);
+  } catch {
+    // ignore
+  }
+}
+
 export function logApiCall(entry: {
   task: 'briefing' | 'email' | 'call';
   provider: 'liner' | 'gemini' | null;
   ok: boolean;
   error_code: string | null;
   latency_ms: number | null;
+  model?: string | null;
+  strategy?: 'cost' | 'balanced' | 'quality' | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
 }): void {
   try {
     const logs = getApiLogs();
@@ -140,7 +153,8 @@ export function saveDraft(
   kind: 'email' | 'call',
   source: 'live' | 'cache' | 'fallback',
   content: any,
-  refDate: string
+  refDate: string,
+  model: string | null = null
 ): DraftRecord {
   const drafts = getDrafts();
   const nextId = drafts.length > 0 ? Math.max(...drafts.map(d => d.id)) + 1 : 1;
@@ -152,6 +166,7 @@ export function saveDraft(
     kind,
     source,
     original_json: content,
+    model,
     edited_text: kind === 'email' ? (content?.body || '') : '',
     ref_date: refDate,
     created_at: now,

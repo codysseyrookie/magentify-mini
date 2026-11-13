@@ -24,8 +24,8 @@ async function startServer() {
 
   // LLM 생성 엔드포인트
   app.post('/api/llm/generate', async (req, res) => {
-    const { systemPrompt, userPrompt } = req.body || {};
-    const result = await generate(systemPrompt, userPrompt);
+    const { systemPrompt, userPrompt, strategy } = req.body || {};
+    const result = await generate(systemPrompt, userPrompt, process.env, undefined, undefined, strategy);
     res.status(result.status).json(result.body);
   });
 

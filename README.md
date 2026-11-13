@@ -38,7 +38,18 @@
 | Liner Model API 응답(저장본) | 과거에 실제 API가 만든 응답을 저장해 둔 것(`public/cache/llm-cache.json` 또는 브라우저 저장소) |
 | 안전한 기본 템플릿 / 기본 템플릿 | API 키가 없거나 호출·검증에 실패해 코드 템플릿을 쓴 경우 (폴백 템플릿은 저장본으로 저장하지 않는다) |
 
-호출 시도는 브라우저에 로그로 남는다(`magentify_api_logs`: 작업, 공급자, 성공 여부, 오류 코드, 지연 시간).
+호출 시도는 브라우저에 로그로 남고(`magentify_api_logs`: 작업, 공급자, 실제 응답 모델, Router 전략, 성공 여부, 오류 코드, 지연 시간, 토큰 수), **설정 화면의 "Liner API 호출 현황" 패널**에서 확인할 수 있다(총 호출, 성공률, 평균 응답 시간, 작업별 전략과 실제 응답 모델, 사용 토큰, 최근 호출). 저장본(캐시) 사용은 호출로 세지 않는다.
+
+### 작업별 Liner Router 전략
+
+Router API(`liner-gpt-router`)의 `routing_strategy`를 작업 성격에 맞게 나눠 쓴다. 전략은 우선순위 힌트이고, 실제로 어떤 모델이 답할지는 라우터가 요청 내용을 보고 정한다. 그래서 화면 라벨과 호출 현황에는 **실제 응답 모델**을 그대로 표시한다.
+
+| 작업 | 요청 전략 | 이유 |
+| :--- | :--- | :--- |
+| 주간 브리핑 | `cost` (비용 우선) | 요약 수준의 내부용 글 |
+| 이메일 초안, 통화 가이드 | `quality` (품질 우선) | 거래처에 나가는 문안이라 품질이 중요 |
+
+코드 위치: `src/llm.ts`의 `STRATEGY_BY_TASK`. 호출 단위로 `options.strategy`로 바꿀 수 있다.
 
 ## 4. 구조
 
@@ -127,7 +138,7 @@ npm run cache:generate -- --force   # 전체 다시 생성
 ## 7. 테스트
 
 ```bash
-npm test            # vitest 67개
+npm test            # vitest 77개
 npm run lint        # tsc --noEmit
 npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 ```
@@ -138,6 +149,7 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | `tests/llm.test.ts` | 금지어, 스키마 누락, 입력에 없는 숫자, 브리핑 id 집합과 문장 품질(영어 필드명·별칭 노출 금지), 키 없음·타임아웃·잘못된 JSON·위반 시 폴백, 재요청, 저장본 사용, "새로 생성" 실패를 live로 위장하지 않는지 |
 | `tests/server_llm.test.ts` | Liner 주소 보정, 공급자 우선순위, 재시도 정책, 401 시 재시도 없음과 키 비노출, 타임아웃, 일일 한도 |
 | `tests/vercel_handlers.test.ts` | Vercel 함수의 메서드·본문·키 없음 처리 |
+| `tests/apiStats.test.ts` | 호출 현황 계산(성공률, 성공 호출만의 평균 시간, 토큰 합계, 작업별 모델·전략 횟수) |
 
 ## 8. 배포 (Vercel)
 
@@ -160,11 +172,12 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | 구분 | 내용 |
 | :--- | :--- |
 | 기존(프로토타입) | 화면 5개, 분석 로직(`src/analysis.ts`), localStorage 저장, 데모 데이터, 기획서·PRD 문서 |
-| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, vitest 67개, 키 검사 스크립트, 응답 저장본 41건, 이 README |
+| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, 작업별 Router 전략(`routing_strategy`)과 실제 응답 모델 표시, 설정 화면의 Liner API 호출 현황 패널, vitest 77개, 키 검사 스크립트, 응답 저장본 41건, 이 README |
 
 ## 11. 확인된 사실 (2026-11-13 기준)
 
 - Liner Model API 연결 확인: `https://platform.liner.com/api/v1/chat/completions`, 모델 `liner-gpt-router`, 인증 `Authorization: Bearer` 방식으로 호출 성공. 브리핑 1회 응답 시간 약 5.3초(기본 타임아웃 20초 안).
+- Router `routing_strategy` 확인: 같은 요청에 대해 `cost`는 `gpt-6-luna`, 기본(`balanced`)은 `gpt-6.1-terra`, `quality`는 `gpt-6.1-sol`이 응답했고, 허용되지 않은 값은 400(`must be one of: cost, balanced, quality`)으로 거절된다. 응답의 `usage`에는 토큰 수가 오며 비용(`usage.cost`)은 오지 않아 비용은 표시하지 않는다.
 - 앱에서 **새로 생성**을 눌렀을 때 "실시간 AI 응답" 라벨과 호출 로그(공급자 liner, 성공)가 남는 것을 확인했다.
 - 키가 없는 환경에서는 "기본 템플릿" 라벨이 표시되고, 저장본이 있으면 "Liner Model API 응답(저장본)"으로 표시된다.
 - 후속 조치 예정 현황은 **거래처 화면 하단과 알림 벨**에 표시된다(접촉 기록 저장 즉시 반영). 개요 화면에는 별도 표가 없다.

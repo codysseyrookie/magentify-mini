@@ -526,7 +526,7 @@ export function MessagePage({
                         <StatusBadge status="in_progress" label="AI 초안" />
                         <span className="text-[13px]" style={{ color: 'var(--ztd-muted)' }}>
                           {currentEmailDraft.source === 'live'
-                            ? '실시간 AI 응답'
+                            ? `실시간 AI 응답${currentEmailDraft.model ? ` (${currentEmailDraft.model})` : ''}`
                             : currentEmailDraft.source === 'cache'
                             ? 'Liner Model API 응답(저장본)'
                             : '안전한 기본 템플릿'}
@@ -665,7 +665,7 @@ export function MessagePage({
                         <StatusBadge status="in_progress" label="AI 통화 가이드" />
                         <span className="text-[13px]" style={{ color: 'var(--ztd-muted)' }}>
                           {currentCallDraft.source === 'live'
-                            ? '실시간 AI 응답'
+                            ? `실시간 AI 응답${currentCallDraft.model ? ` (${currentCallDraft.model})` : ''}`
                             : currentCallDraft.source === 'cache'
                             ? 'Liner Model API 응답(저장본)'
                             : '안전한 기본 템플릿'}

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { StatusBadge } from './StatusBadge';
+import { ApiUsagePanel } from './ApiUsagePanel';
 
 interface SettingsPageProps {
   refDate: string;
@@ -167,6 +168,9 @@ export function SettingsPage({
             <StatusBadge status={serverLlmStatus.configured ? 'contacted' : 'in_progress'} label={serverLlmStatus.configured ? '연결됨' : '로컬 템플릿'} />
           </div>
         </div>
+
+        {/* Liner API 호출 현황 */}
+        <ApiUsagePanel />
 
         {/* Export & Demo Reset */}
         <div className="lg:col-span-12 bento-card bento-enter flex flex-col md:flex-row md:items-center justify-between gap-4" style={{ animationDelay: '120ms' }}>
