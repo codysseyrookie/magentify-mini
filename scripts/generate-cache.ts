@@ -22,9 +22,17 @@ import {
   briefingCacheKey,
   callCacheKey,
   emailCacheKey,
+  FOLLOWUP_PRESET_MEMO,
+  followupCacheKey,
+  generateAnswer,
   generateBriefing,
   generateCallGuide,
   generateEmail,
+  generateFollowup,
+  maskMemo,
+  QA_PRESET_QUESTIONS,
+  qaCacheKey,
+  buildQaInput,
   type MessageTone,
 } from '../src/llm.ts';
 
@@ -101,6 +109,17 @@ for (const a of assessments) {
     await ensure(callCacheKey(a, tone), () => generateCallGuide(a, { ...liveOpts, tone }));
   }
 }
+
+// 질문하기 예시 질문 3개와 메모 후속 조치 예시 메모 1개를 미리 생성해 저장본에 넣는다.
+const qaInput = buildQaInput(assessments, summary);
+for (const q of QA_PRESET_QUESTIONS) {
+  await ensure(qaCacheKey(q, qaInput.json), () => generateAnswer(q, assessments, summary, liveOpts));
+}
+const FOLLOWUP_CONTACT_DATE = '2026-11-30';
+await ensure(
+  followupCacheKey(maskMemo(FOLLOWUP_PRESET_MEMO, ['대성정밀']), FOLLOWUP_CONTACT_DATE),
+  () => generateFollowup({ memo: FOLLOWUP_PRESET_MEMO, contactDate: FOLLOWUP_CONTACT_DATE, names: ['대성정밀'] }, liveOpts)
+);
 
 // 업종 동향: Liner Search로 기사를 받아 public/cache/news-cache.json에 저장하고,
 // 우선 확인 거래처의 이메일을 그 기사를 참고해 다시 만들어 저장본에 넣는다.

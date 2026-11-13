@@ -23,8 +23,8 @@ describe('summarizeApiLogs', () => {
     expect(s.successRate).toBeNull();
     expect(s.avgLatencyMs).toBeNull();
     expect(s.totalTokens).toBe(0);
-    expect(s.byTask.map(t => t.task)).toEqual(['briefing', 'email', 'call', 'news']);
-    expect(s.byTask.map(t => t.calls)).toEqual([0, 0, 0, 0]);
+    expect(s.byTask.map(t => t.task)).toEqual(['briefing', 'email', 'call', 'qa', 'followup', 'news']);
+    expect(s.byTask.map(t => t.calls)).toEqual([0, 0, 0, 0, 0, 0]);
   });
 
   it('성공률, 평균 시간(성공만), 토큰 합계를 계산한다', () => {

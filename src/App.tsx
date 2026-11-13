@@ -869,6 +869,7 @@ export default function App() {
                 touchpoints={allTouchpoints}
                 draftCustomerKeys={draftCustomerKeys}
                 weeklyGoal={weeklyGoal}
+                demoMode={demoMode}
                 recencyWarning={recencyWarning}
                 onGenerateBriefing={handleGenerateBriefing}
                 onOpenCustomer={handleOpenCustomer}
@@ -920,6 +921,7 @@ export default function App() {
                 emailSubject={emailSubject}
                 emailBody={emailBody}
                 isGeneratingEmail={isGeneratingEmail}
+                demoMode={demoMode}
                 includeNews={includeNews}
                 newsQuery={newsQuery}
                 isNewsLoading={isNewsLoading}

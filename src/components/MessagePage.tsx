@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { MessageTone, renderPlaceholders } from '../llm';
 import { StatusBadge, VipBadge } from './StatusBadge';
+import { FollowupSuggest } from './FollowupSuggest';
 
 interface MessagePageProps {
   assessments: Assessment[];
@@ -24,6 +25,7 @@ interface MessagePageProps {
   emailSubject: string;
   emailBody: string;
   isGeneratingEmail: boolean;
+  demoMode: boolean;
   includeNews: boolean;
   newsQuery: string;
   isNewsLoading: boolean;
@@ -81,6 +83,7 @@ export function MessagePage({
   emailSubject,
   emailBody,
   isGeneratingEmail,
+  demoMode,
   includeNews,
   newsQuery,
   isNewsLoading,
@@ -918,6 +921,27 @@ export function MessagePage({
                   className="w-full h-[44px] rounded-full px-4 text-[14px]"
                   style={{ backgroundColor: 'var(--ztd-lift)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
                 />
+                {/* 메모 -> 후속 조치 제안 (Liner Model API) */}
+                <div className="mt-2.5">
+                  <FollowupSuggest
+                    memo={touchNote}
+                    contactDate={touchDate}
+                    customerName={currentAssessment?.display_name ?? ''}
+                    contactName={contactName}
+                    demoMode={demoMode}
+                    onUsePresetMemo={onTouchNoteChange}
+                    onApply={(c) => {
+                      onTouchOutcomeChange(c.outcome);
+                      if (c.channel) onTouchChannelChange(c.channel);
+                      if (c.next_contact_date) {
+                        onHasNextDateChange(true);
+                        onNextContactDateChange(c.next_contact_date);
+                      } else {
+                        onHasNextDateChange(false);
+                      }
+                    }}
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">

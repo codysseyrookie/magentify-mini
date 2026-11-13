@@ -29,7 +29,7 @@ export function clearApiLogs(): void {
 }
 
 export function logApiCall(entry: {
-  task: 'briefing' | 'email' | 'call' | 'news';
+  task: ApiLogRecord['task'];
   provider: 'liner' | 'gemini' | null;
   ok: boolean;
   error_code: string | null;

@@ -130,9 +130,32 @@ export interface NewsItem {
   description: string;
 }
 
+/** 질문하기 답변 (별칭은 화면에서 거래처명으로 바꾼다) */
+export interface QaContent {
+  answer: string;
+  referenced: string[];
+}
+
+export type TouchOutcome =
+  | 'planned'
+  | 'contacted'
+  | 'waiting_reply'
+  | 'quote_requested'
+  | 'reorder_confirmed'
+  | 'on_hold'
+  | 'not_needed';
+
+/** 접촉 메모에서 뽑은 후속 조치 제안 (저장은 사람이 확인한 뒤에만) */
+export interface FollowupContent {
+  outcome: TouchOutcome;
+  channel: 'email' | 'phone' | 'other' | null;
+  next_contact_date: string | null;
+  reason: string;
+}
+
 export interface ApiLogRecord {
   id: number;
-  task: 'briefing' | 'email' | 'call' | 'news';
+  task: 'briefing' | 'email' | 'call' | 'news' | 'qa' | 'followup';
   provider: 'liner' | 'gemini' | null;
   ok: boolean;
   error_code: string | null;

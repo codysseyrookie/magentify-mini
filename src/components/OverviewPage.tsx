@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { ChartCard, BarChart, DonutChart, formatCurrency } from 'ztd-charts';
 import { Assessment, BriefingContent, LlmResult, SummaryCounts, TouchpointRecord } from '../types';
 import { StatusBadge, VipBadge } from './StatusBadge';
+import { QaPanel } from './QaPanel';
 
 interface OverviewPageProps {
   assessments: Assessment[];
@@ -14,6 +15,7 @@ interface OverviewPageProps {
   touchpoints: TouchpointRecord[];
   draftCustomerKeys: Set<string>;
   weeklyGoal: number;
+  demoMode: boolean;
   recencyWarning: { maxDate: string; diffDays: number } | null;
   onGenerateBriefing: (forceLive: boolean) => void;
   onOpenCustomer: (customerKey: string) => void;
@@ -33,6 +35,7 @@ export function OverviewPage({
   touchpoints,
   draftCustomerKeys,
   weeklyGoal,
+  demoMode,
   recencyWarning,
   onGenerateBriefing,
   onOpenCustomer,
@@ -581,6 +584,9 @@ export function OverviewPage({
           )}
         </div>
       </div>
+
+      {/* 질문하기 (Liner Model API) */}
+      <QaPanel assessments={assessments} summary={summary} demoMode={demoMode} onOpenCustomer={onOpenCustomer} />
 
       {/* Bottom Bento: Priority Customers Quick Table */}
       <div className="bento-card bento-enter space-y-4" style={{ animationDelay: '200ms' }}>

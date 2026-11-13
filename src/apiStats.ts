@@ -24,7 +24,7 @@ export interface ApiStats {
   errors: Record<string, number>;
 }
 
-const TASKS: TaskStat['task'][] = ['briefing', 'email', 'call', 'news'];
+const TASKS: TaskStat['task'][] = ['briefing', 'email', 'call', 'qa', 'followup', 'news'];
 
 function avg(values: number[]): number | null {
   return values.length ? Math.round(values.reduce((a, b) => a + b, 0) / values.length) : null;
@@ -83,6 +83,8 @@ export const TASK_LABEL: Record<TaskStat['task'], string> = {
   briefing: '주간 브리핑',
   email: '이메일 초안',
   call: '통화 가이드',
+  qa: '질문하기',
+  followup: '메모 후속 조치 제안',
   news: '업종 동향 검색',
 };
 

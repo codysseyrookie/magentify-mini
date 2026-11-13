@@ -261,8 +261,8 @@ describe('브리핑 문장 품질 검증', () => {
 });
 
 describe('작업별 Router 전략 (STRATEGY_BY_TASK)', () => {
-  it('브리핑은 비용 우선, 이메일·통화 가이드는 품질 우선으로 정해져 있다', () => {
-    expect(STRATEGY_BY_TASK).toEqual({ briefing: 'cost', email: 'quality', call: 'quality' });
+  it('브리핑·후속 조치 추출은 비용 우선, 이메일·통화 가이드는 품질 우선, 질문 답변은 균형으로 정해져 있다', () => {
+    expect(STRATEGY_BY_TASK).toEqual({ briefing: 'cost', email: 'quality', call: 'quality', qa: 'balanced', followup: 'cost' });
   });
 
   it('이메일 호출은 quality를 서버에 보내고, 응답 모델과 토큰을 결과에 담는다', async () => {
