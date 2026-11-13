@@ -6,6 +6,7 @@ import {
   LlmResult,
   SummaryCounts
 } from './types';
+import { logApiCall } from './storage';
 
 export const FORBIDDEN_WORDS = [
   '확정',
@@ -45,10 +46,30 @@ export function extractNumbers(text: string): Set<number> {
   return nums;
 }
 
+/**
+ * 입력 텍스트에서 허용 숫자 집합을 만든다.
+ * 소수(예: 2.1)는 반올림 값(2)도 함께 허용한다.
+ */
+export function buildAllowedNumbers(inputText: string): Set<number> {
+  const base = extractNumbers(inputText);
+  const out = new Set<number>(base);
+  for (const n of base) {
+    if (!Number.isInteger(n)) out.add(Math.round(n));
+  }
+  return out;
+}
+
+function collectStrings(value: any, acc: string[] = []): string[] {
+  if (typeof value === 'string') acc.push(value);
+  else if (Array.isArray(value)) value.forEach(v => collectStrings(v, acc));
+  else if (value && typeof value === 'object') Object.values(value).forEach(v => collectStrings(v, acc));
+  return acc;
+}
+
 export function validate(
   task: 'briefing' | 'email' | 'call',
   content: any,
-  allowedNumbers: Set<number>,
+  allowedNumbers?: Set<number>,
   allowedIds?: Set<string>
 ): string[] {
   const violations: string[] = [];
@@ -91,6 +112,17 @@ export function validate(
   for (const word of FORBIDDEN_WORDS) {
     if (dumpedStr.includes(word)) {
       violations.push(`금지어 포함: '${word}'`);
+    }
+  }
+
+  // 입력에 없는 숫자 인용 검사 (허용 집합이 주어진 경우에만)
+  if (allowedNumbers && allowedNumbers.size > 0) {
+    const used = extractNumbers(collectStrings(content).join('\n'));
+    for (const n of used) {
+      if (!allowedNumbers.has(n)) {
+        violations.push(`입력에 없는 숫자 인용: ${n}`);
+        break;
+      }
     }
   }
 
@@ -181,8 +213,12 @@ export function fallbackCall(a?: Assessment, tone: MessageTone = '정중하게')
   };
 }
 
-// Local cache helpers
+// ---------------------------------------------------------------------------
+// 캐시: (1) 브라우저에 저장된 live 응답, (2) 저장소에 포함된 public/cache/llm-cache.json
+// 폴백 템플릿은 캐시에 저장하지 않는다. "저장본" 라벨은 실제 API 응답일 때만 쓴다.
+// ---------------------------------------------------------------------------
 const CACHE_PREFIX = 'magentify_cache_';
+const BUNDLED_CACHE_URL = '/cache/llm-cache.json';
 
 export function getCachedResult<T>(key: string): T | null {
   try {
@@ -202,29 +238,66 @@ export function setCachedResult<T>(key: string, data: T): void {
   }
 }
 
-// Server-side LLM Proxy Caller
+let bundledCache: Record<string, any> | null | undefined;
+
+export function __setBundledCacheForTest(v: Record<string, any> | null | undefined): void {
+  bundledCache = v;
+}
+
+async function getBundledCached<T>(key: string): Promise<T | null> {
+  if (bundledCache === undefined) {
+    try {
+      const res = await fetch(BUNDLED_CACHE_URL);
+      bundledCache = res.ok ? await res.json() : null;
+    } catch {
+      bundledCache = null;
+    }
+  }
+  const entry = bundledCache?.[key];
+  return entry ? (entry as T) : null;
+}
+
+// ---------------------------------------------------------------------------
+// 서버 LLM 프록시 호출 (Express 개발 서버 또는 Vercel 함수: /api/llm/generate)
+// ---------------------------------------------------------------------------
+class LlmCallError extends Error {
+  code: string;
+  provider: 'liner' | 'gemini' | null;
+  constructor(message: string, code: string, provider: 'liner' | 'gemini' | null = null) {
+    super(message);
+    this.code = code;
+    this.provider = provider;
+  }
+}
+
 async function callServerLLMAPI(
   systemPrompt: string,
   userPrompt: string
-): Promise<string> {
-  const res = await fetch('/api/llm/generate', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ systemPrompt, userPrompt }),
-  });
+): Promise<{ text: string; provider: 'liner' | 'gemini' | null }> {
+  let res: Response;
+  try {
+    res = await fetch('/api/llm/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt, userPrompt }),
+    });
+  } catch {
+    throw new LlmCallError('서버에 연결할 수 없습니다.', 'network');
+  }
 
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || `Server LLM HTTP error: ${res.status}`);
+    throw new LlmCallError(
+      errorData.error || `Server LLM HTTP error: ${res.status}`,
+      errorData.code || `http_${res.status}`
+    );
   }
 
   const data = await res.json();
-  return data.text || '';
+  return { text: data.text || '', provider: data.provider === 'gemini' ? 'gemini' : data.provider === 'liner' ? 'liner' : null };
 }
 
-function cleanJsonResponse(rawText: string): any {
+export function cleanJsonResponse(rawText: string): any {
   let clean = rawText.trim();
   if (clean.startsWith('```')) {
     clean = clean.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
@@ -232,83 +305,113 @@ function cleanJsonResponse(rawText: string): any {
   return JSON.parse(clean);
 }
 
+interface RunTaskParams<T> {
+  task: 'briefing' | 'email' | 'call';
+  cacheKey: string;
+  fallbackContent: T;
+  systemPrompt: string;
+  userPrompt: string;
+  allowedIds?: Set<string>;
+  options: { demoMode: boolean; forceLive?: boolean };
+}
+
+/**
+ * 공통 실행 순서 (PRD 6.3):
+ * 캐시(데모 모드, 새로 생성이 아닐 때) -> live 호출(위반 시 1회 재요청) -> 실패 시 폴백.
+ * live 호출에 실패하면 절대 live/cache 라벨을 붙이지 않고 source='fallback'과 사유(error_code)를 돌려준다.
+ */
+export async function runTask<T>(p: RunTaskParams<T>): Promise<LlmResult<T>> {
+  const { task, cacheKey, fallbackContent, systemPrompt, userPrompt, allowedIds, options } = p;
+
+  if (options.demoMode && !options.forceLive) {
+    const cached = getCachedResult<T>(cacheKey) ?? (await getBundledCached<T>(cacheKey));
+    if (cached) {
+      return { content: cached, source: 'cache', latency_ms: null, error_code: null };
+    }
+  }
+
+  const allowedNumbers = buildAllowedNumbers(userPrompt);
+  let prompt = userPrompt;
+  let lastCode = 'unknown';
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const started = performance.now();
+    try {
+      const { text, provider } = await callServerLLMAPI(systemPrompt, prompt);
+      const latency = Math.round(performance.now() - started);
+      let parsed: any;
+      try {
+        parsed = cleanJsonResponse(text);
+      } catch {
+        logApiCall({ task, ok: false, error_code: 'invalid_json', latency_ms: latency, provider });
+        lastCode = 'invalid_json';
+        prompt = `${userPrompt}\n\n[이전 응답 오류] JSON으로 파싱할 수 없었습니다. 설명 없이 순수 JSON 객체만 다시 출력하세요.`;
+        continue;
+      }
+      const violations = validate(task, parsed, allowedNumbers, allowedIds);
+      if (violations.length === 0) {
+        logApiCall({ task, ok: true, error_code: null, latency_ms: latency, provider });
+        setCachedResult(cacheKey, parsed);
+        return { content: parsed as T, source: 'live', latency_ms: latency, error_code: null, provider };
+      }
+      logApiCall({ task, ok: false, error_code: 'rule_violation', latency_ms: latency, provider });
+      lastCode = 'rule_violation';
+      prompt = `${userPrompt}\n\n[이전 응답 위반 사항] ${violations.join(' / ')}\n위 사항을 고쳐 JSON으로만 다시 작성하세요.`;
+    } catch (err: any) {
+      const code = err instanceof LlmCallError ? err.code : 'unknown';
+      logApiCall({ task, ok: false, error_code: code, latency_ms: Math.round(performance.now() - started), provider: null });
+      lastCode = code;
+      // 키 없음, 한도 초과, 인증, 서버 연결 불가는 재요청해도 의미가 없다.
+      if (['no_key', 'limit', 'auth', 'network', 'timeout', 'rate_limit', 'server'].includes(code)) break;
+    }
+  }
+
+  return { content: fallbackContent, source: 'fallback', latency_ms: null, error_code: lastCode };
+}
+
+export function briefingCacheKey(top: Assessment[]): string {
+  return `briefing_${top.slice(0, 4).map(t => `:${t.gap_days}`).join('_')}`;
+}
+
+export function emailCacheKey(a: Assessment, tone: MessageTone = '정중하게'): string {
+  return `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+}
+
+export function callCacheKey(a: Assessment, tone: MessageTone = '정중하게'): string {
+  return `call_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+}
+
+const NUMBER_RULE = '숫자는 입력에 있는 값만 인용한다(새로운 숫자·기간·금액을 만들지 않는다).';
+
 export async function generateBriefing(
   top: Assessment[],
   summary: SummaryCounts,
   options: { demoMode: boolean; forceLive?: boolean; apiKey?: string }
 ): Promise<LlmResult<BriefingContent>> {
   const top4 = top.slice(0, 4);
-  const cacheKey = `briefing_${top4.map(t => `${t.customer_key}:${t.gap_days}`).join('_')}`;
+  const cacheKey = briefingCacheKey(top4);
 
-  // 1. If demo mode and not forceLive, check cache
-  if (options.demoMode && !options.forceLive) {
-    const cached = getCachedResult<BriefingContent>(cacheKey);
-    if (cached) {
-      return {
-        content: cached,
-        source: 'cache',
-        latency_ms: null,
-        error_code: null,
-      };
-    }
-  }
-
-  // Fallback content as base
-  const fb = fallbackBriefing(top4);
-
-  // If forceLive or not in demo mode, try calling server-side LLM
-  if (options.forceLive || !options.demoMode) {
-    try {
-      const startTime = performance.now();
-      const systemPrompt = `너는 B2B 제조업 대표를 위한 거래처 관리 비서다.
+  const systemPrompt = `너는 B2B 제조업 대표를 위한 거래처 관리 비서다.
 반드시 제공된 입력 JSON의 사실만 사용하여 주간 브리핑을 작성하라.
 규칙:
 1. 가격, 납기, 할인, 재고, 혜택을 약속하거나 언급하지 않는다.
 2. 이탈, 손실, 거래 중단을 확정하는 표현을 쓰지 않는다.
-3. 숫자는 입력에 있는 값만 인용한다.
+3. ${NUMBER_RULE}
 4. 한국어 존댓말을 사용한다.
 5. 출력은 순수 JSON으로만 응답하라:
 {"headline": "60자 이내 요약", "items": [{"id": "별칭", "reason": "80자 이내 근거", "action": "email 또는 call", "tone": "정중 또는 가벼운 안부"}], "caution": "한 문장 주의사항"}`;
 
-      const userPrompt = `분석 요약: ${JSON.stringify(summary)}\n우선 거래처: ${JSON.stringify(top4.map(a => ({ id: a.alias, status: a.status, vip: a.vip, gap: a.gap_days, median: a.median_interval, ratio: a.ratio })))}`;
+  const userPrompt = `분석 요약: ${JSON.stringify(summary)}\n우선 거래처: ${JSON.stringify(top4.map(a => ({ id: a.alias, status: a.status, vip: a.vip, gap: a.gap_days, median: a.median_interval, ratio: a.ratio })))}`;
 
-      const text = await callServerLLMAPI(systemPrompt, userPrompt);
-      const parsed = cleanJsonResponse(text);
-      const violations = validate('briefing', parsed, new Set(), new Set(top4.map(a => a.alias)));
-      if (violations.length === 0) {
-        setCachedResult(cacheKey, parsed);
-        return {
-          content: parsed,
-          source: 'live',
-          latency_ms: Math.round(performance.now() - startTime),
-          error_code: null,
-        };
-      }
-    } catch (err: any) {
-      console.warn('Live Briefing API call error, falling back to template:', err.message);
-    }
-  }
-
-  // If forceLive without API key or on error, simulate realistic demo live call
-  if (options.forceLive) {
-    await new Promise(r => setTimeout(r, 650));
-    setCachedResult(cacheKey, fb);
-    return {
-      content: fb,
-      source: 'live',
-      latency_ms: 650,
-      error_code: null,
-    };
-  }
-
-  // Cache fallback for demo
-  setCachedResult(cacheKey, fb);
-  return {
-    content: fb,
-    source: options.demoMode ? 'cache' : 'fallback',
-    latency_ms: null,
-    error_code: null,
-  };
+  return runTask<BriefingContent>({
+    task: 'briefing',
+    cacheKey,
+    fallbackContent: fallbackBriefing(top4),
+    systemPrompt,
+    userPrompt,
+    allowedIds: new Set(top4.map(a => a.alias)),
+    options,
+  });
 }
 
 export async function generateEmail(
@@ -316,72 +419,29 @@ export async function generateEmail(
   options: { demoMode: boolean; forceLive?: boolean; apiKey?: string; tone?: MessageTone }
 ): Promise<LlmResult<EmailDraftContent>> {
   const tone: MessageTone = options.tone || '정중하게';
-  const cacheKey = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+  const cacheKey = emailCacheKey(a, tone);
 
-  if (options.demoMode && !options.forceLive) {
-    const cached = getCachedResult<EmailDraftContent>(cacheKey);
-    if (cached) {
-      return {
-        content: cached,
-        source: 'cache',
-        latency_ms: null,
-        error_code: null,
-      };
-    }
-  }
-
-  const fb = fallbackEmail(a, tone);
-
-  if (options.forceLive || !options.demoMode) {
-    try {
-      const startTime = performance.now();
-      const systemPrompt = `너는 소규모 제조사 대표를 대필하는 업무 이메일 작성 비서다.
+  const systemPrompt = `너는 소규모 제조사 대표를 대필하는 업무 이메일 작성 비서다.
 문안 어조(톤)는 반드시 '${tone}' 스타일로 작성하라.
 거래처명은 '[거래처명]', 담당자명은 '[담당자명]' 자리표시자를 사용하라.
 규칙:
 1. 가격, 납기, 할인, 재고, 혜택을 약속하지 않는다.
 2. 이탈, 거래 중단, 손실 등 부담을 주는 단어를 쓰지 않는다.
 3. 구매나 발주를 압박하지 말고 안부와 일정 확인 위주로 부드럽게 문의한다.
-4. 순수 JSON으로만 응답하라:
+4. ${NUMBER_RULE}
+5. 순수 JSON으로만 응답하라:
 {"subject": "이메일 제목", "body": "이메일 본문", "check_questions": ["질문1", "질문2"]}`;
 
-      const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소간격 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
+  const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소간격 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
 
-      const text = await callServerLLMAPI(systemPrompt, userPrompt);
-      const parsed = cleanJsonResponse(text);
-      const violations = validate('email', parsed, new Set());
-      if (violations.length === 0) {
-        setCachedResult(cacheKey, parsed);
-        return {
-          content: parsed,
-          source: 'live',
-          latency_ms: Math.round(performance.now() - startTime),
-          error_code: null,
-        };
-      }
-    } catch (err: any) {
-      console.warn('Live Email API call error, falling back to template:', err.message);
-    }
-  }
-
-  if (options.forceLive) {
-    await new Promise(r => setTimeout(r, 550));
-    setCachedResult(cacheKey, fb);
-    return {
-      content: fb,
-      source: 'live',
-      latency_ms: 550,
-      error_code: null,
-    };
-  }
-
-  setCachedResult(cacheKey, fb);
-  return {
-    content: fb,
-    source: options.demoMode ? 'cache' : 'fallback',
-    latency_ms: null,
-    error_code: null,
-  };
+  return runTask<EmailDraftContent>({
+    task: 'email',
+    cacheKey,
+    fallbackContent: fallbackEmail(a, tone),
+    systemPrompt,
+    userPrompt,
+    options,
+  });
 }
 
 export async function generateCallGuide(
@@ -389,69 +449,26 @@ export async function generateCallGuide(
   options: { demoMode: boolean; forceLive?: boolean; apiKey?: string; tone?: MessageTone }
 ): Promise<LlmResult<CallGuideContent>> {
   const tone: MessageTone = options.tone || '정중하게';
-  const cacheKey = `call_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+  const cacheKey = callCacheKey(a, tone);
 
-  if (options.demoMode && !options.forceLive) {
-    const cached = getCachedResult<CallGuideContent>(cacheKey);
-    if (cached) {
-      return {
-        content: cached,
-        source: 'cache',
-        latency_ms: null,
-        error_code: null,
-      };
-    }
-  }
-
-  const fb = fallbackCall(a, tone);
-
-  if (options.forceLive || !options.demoMode) {
-    try {
-      const startTime = performance.now();
-      const systemPrompt = `너는 소규모 제조사 대표를 위한 전화 통화 가이드 작성 비서다.
+  const systemPrompt = `너는 소규모 제조사 대표를 위한 전화 통화 가이드 작성 비서다.
 대화 어조(톤)는 '${tone}' 스타일로 작성하라.
 거래처명은 '[거래처명]', 담당자명은 '[담당자명]' 자리표시자를 그대로 사용하라.
 규칙:
 1. 가격, 납기, 할인, 특가를 약속하지 않는다.
 2. 이탈이나 거래 중단을 추궁하지 않는다.
-3. 순수 JSON으로만 응답하라:
+3. ${NUMBER_RULE}
+4. 순수 JSON으로만 응답하라:
 {"purpose": "통화 목적", "opening": "첫 인사", "questions": ["질문1", "질문2"], "next_step": "다음 단계", "after_call": ["기록1", "기록2"]}`;
 
-      const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소주기 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
+  const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소주기 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
 
-      const text = await callServerLLMAPI(systemPrompt, userPrompt);
-      const parsed = cleanJsonResponse(text);
-      const violations = validate('call', parsed, new Set());
-      if (violations.length === 0) {
-        setCachedResult(cacheKey, parsed);
-        return {
-          content: parsed,
-          source: 'live',
-          latency_ms: Math.round(performance.now() - startTime),
-          error_code: null,
-        };
-      }
-    } catch (err: any) {
-      console.warn('Live Call API call error, falling back to template:', err.message);
-    }
-  }
-
-  if (options.forceLive) {
-    await new Promise(r => setTimeout(r, 500));
-    setCachedResult(cacheKey, fb);
-    return {
-      content: fb,
-      source: 'live',
-      latency_ms: 500,
-      error_code: null,
-    };
-  }
-
-  setCachedResult(cacheKey, fb);
-  return {
-    content: fb,
-    source: options.demoMode ? 'cache' : 'fallback',
-    latency_ms: null,
-    error_code: null,
-  };
+  return runTask<CallGuideContent>({
+    task: 'call',
+    cacheKey,
+    fallbackContent: fallbackCall(a, tone),
+    systemPrompt,
+    userPrompt,
+    options,
+  });
 }

@@ -19,3 +19,6 @@ data/uploads/*
 data/demo_transactions.csv
 !data/demo_transactions.csv
 !data/cache/
+
+# Vercel
+.vercel/

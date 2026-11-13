@@ -103,6 +103,18 @@ export interface LlmResult<T = any> {
   source: 'live' | 'cache' | 'fallback';
   latency_ms: number | null;
   error_code: string | null;
+  /** live 응답을 만든 공급자 (live일 때만) */
+  provider?: 'liner' | 'gemini' | null;
+}
+
+export interface ApiLogRecord {
+  id: number;
+  task: 'briefing' | 'email' | 'call';
+  provider: 'liner' | 'gemini' | null;
+  ok: boolean;
+  error_code: string | null;
+  latency_ms: number | null;
+  created_at: string;
 }
 
 export interface DraftRecord {

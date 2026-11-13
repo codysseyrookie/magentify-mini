@@ -1,11 +1,50 @@
-import { CustomerFlag, DraftRecord, TouchpointRecord } from './types';
+import { ApiLogRecord, CustomerFlag, DraftRecord, TouchpointRecord } from './types';
 
 const STORAGE_KEYS = {
   FLAGS: 'magentify_customer_flags',
   SETTINGS: 'magentify_settings',
   DRAFTS: 'magentify_drafts',
   TOUCHPOINTS: 'magentify_touchpoints',
+  API_LOGS: 'magentify_api_logs',
 };
+
+const API_LOG_MAX = 500;
+
+export function getApiLogs(): ApiLogRecord[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.API_LOGS);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** live 호출을 시도할 때마다 1건 기록한다(캐시 적중은 기록하지 않는다). 데모 리셋으로 지워지지 않는다. */
+export function logApiCall(entry: {
+  task: 'briefing' | 'email' | 'call';
+  provider: 'liner' | 'gemini' | null;
+  ok: boolean;
+  error_code: string | null;
+  latency_ms: number | null;
+}): void {
+  try {
+    const logs = getApiLogs();
+    const nextId = logs.length > 0 ? Math.max(...logs.map(l => l.id)) + 1 : 1;
+    logs.unshift({
+      id: nextId,
+      ...entry,
+      created_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    });
+    localStorage.setItem(STORAGE_KEYS.API_LOGS, JSON.stringify(logs.slice(0, API_LOG_MAX)));
+  } catch {
+    // localStorage 사용 불가(테스트 등)이면 무시
+  }
+}
+
+export function countApiCalls(): { total: number; ok: number } {
+  const logs = getApiLogs();
+  return { total: logs.length, ok: logs.filter(l => l.ok).length };
+}
 
 export function seedDemoFlags(): Record<string, CustomerFlag> {
   const defaults: Record<string, CustomerFlag> = {
