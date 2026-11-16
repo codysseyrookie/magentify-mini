@@ -22,6 +22,13 @@ export const FORBIDDEN_WORDS = [
   '납기 보장',
 ];
 
+/**
+ * "확정"이 같은 문장 안(마침표·물음표 전, 10자 이내)에서 부정 표현으로 이어지는 경우.
+ * 예: "확정할 수 없습니다", "확정된 것은 아닙니다", "확정을 뜻하지는 않습니다", "확정하지 마세요"
+ * (실측에서 모델이 이런 안전한 문장을 써도 재요청이 일어났다.) 한계: 부정어가 10자 이내에 따로 있는 단정문은 통과할 수 있다.
+ */
+export const NEGATED_CONFIRM = /확정(?=[^.!?\n]{0,10}(?:아니|아닌|아닙|않|없|못|마세요|마십|말))/g;
+
 export function renderPlaceholders(
   text: string,
   displayName: string,
@@ -160,9 +167,11 @@ export function validate(
   }
 
   // Forbidden words check
+  // '확정'은 "이탈을 확정할 수 없습니다"처럼 부정하는 안전한 문장에는 쓰이므로, 부정 표현은 빼고 검사한다(단정형은 계속 차단).
   const dumpedStr = JSON.stringify(content);
   for (const word of FORBIDDEN_WORDS) {
-    if (dumpedStr.includes(word)) {
+    const target = word === '확정' ? dumpedStr.replace(NEGATED_CONFIRM, '') : dumpedStr;
+    if (target.includes(word)) {
       violations.push(`금지어 포함: '${word}'`);
     }
   }
@@ -335,6 +344,7 @@ interface ServerLlmResponse {
 }
 
 async function callServerLLMAPI(
+  task: TaskName,
   systemPrompt: string,
   userPrompt: string,
   strategy?: RoutingStrategy
@@ -344,7 +354,7 @@ async function callServerLLMAPI(
     res = await fetch('/api/llm/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ systemPrompt, userPrompt, strategy }),
+      body: JSON.stringify({ task, systemPrompt, userPrompt, strategy }),
     });
   } catch {
     throw new LlmCallError('서버에 연결할 수 없습니다.', 'network');
@@ -426,7 +436,7 @@ export async function runTask<T>(p: RunTaskParams<T>): Promise<LlmResult<T>> {
   for (let attempt = 0; attempt < 2; attempt++) {
     const started = performance.now();
     try {
-      const { text, provider, model, usage } = await callServerLLMAPI(systemPrompt, prompt, strategy);
+      const { text, provider, model, usage } = await callServerLLMAPI(task, systemPrompt, prompt, strategy);
       const latency = Math.round(performance.now() - started);
       const meta = {
         provider,

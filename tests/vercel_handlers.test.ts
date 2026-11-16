@@ -15,6 +15,13 @@ function mockRes() {
   return res;
 }
 
+const SAME_ORIGIN = { origin: 'https://app.test', host: 'app.test' };
+const VALID_BODY = {
+  task: 'call',
+  systemPrompt: '너는 소규모 제조사 대표를 위한 전화 통화 가이드 작성 비서다.\n규칙: 통화 목적을 작성한다.',
+  userPrompt: '거래처 정보: 공백 63일',
+};
+
 describe('Vercel 서버리스 함수', () => {
   it('GET /api/llm/status 는 공급자 상태를 JSON으로 돌려준다', () => {
     const res = mockRes();
@@ -36,7 +43,7 @@ describe('Vercel 서버리스 함수', () => {
     delete process.env.GEMINI_API_KEY;
     try {
       const res = mockRes();
-      await generateHandler({ method: 'POST', body: { systemPrompt: 's', userPrompt: 'u' } }, res);
+      await generateHandler({ method: 'POST', headers: SAME_ORIGIN, body: VALID_BODY }, res);
       expect(res.statusCode).toBe(503);
       expect(res.body.code).toBe('no_key');
     } finally {
@@ -51,7 +58,7 @@ describe('Vercel 서버리스 함수', () => {
     delete process.env.GEMINI_API_KEY;
     try {
       const res = mockRes();
-      await generateHandler({ method: 'POST', body: JSON.stringify({ systemPrompt: 's', userPrompt: 'u' }) }, res);
+      await generateHandler({ method: 'POST', headers: SAME_ORIGIN, body: JSON.stringify(VALID_BODY) }, res);
       expect(res.statusCode).toBe(503); // 파싱에 성공해 키 검사 단계까지 도달
     } finally {
       if (saved) process.env.LINER_API_KEY = saved;
@@ -60,7 +67,7 @@ describe('Vercel 서버리스 함수', () => {
 
   it('본문이 비어 있으면 400', async () => {
     const res = mockRes();
-    await generateHandler({ method: 'POST', body: {} }, res);
+    await generateHandler({ method: 'POST', headers: SAME_ORIGIN, body: {} }, res);
     expect(res.statusCode).toBe(400);
     vi.restoreAllMocks();
   });

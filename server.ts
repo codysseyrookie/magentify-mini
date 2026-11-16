@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { generate, getStatus } from './api/_llm.ts';
 import { searchNews } from './api/_news.ts';
+import { guardRequest } from './api/_guard.ts';
 
 dotenv.config();
 
@@ -25,6 +26,8 @@ async function startServer() {
 
   // LLM 생성 엔드포인트
   app.post('/api/llm/generate', async (req, res) => {
+    const denied = guardRequest({ method: req.method, headers: req.headers, ip: req.socket.remoteAddress, body: req.body }, 'generate');
+    if (denied) return res.status(denied.status).json(denied.body);
     const { systemPrompt, userPrompt, strategy } = req.body || {};
     const result = await generate(systemPrompt, userPrompt, process.env, undefined, undefined, strategy);
     res.status(result.status).json(result.body);
@@ -32,6 +35,8 @@ async function startServer() {
 
   // 업종 동향 검색 (Liner Search API)
   app.post('/api/llm/news', async (req, res) => {
+    const denied = guardRequest({ method: req.method, headers: req.headers, ip: req.socket.remoteAddress, body: req.body }, 'news');
+    if (denied) return res.status(denied.status).json(denied.body);
     const result = await searchNews((req.body || {}).query);
     res.status(result.status).json(result.body);
   });

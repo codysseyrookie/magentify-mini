@@ -61,6 +61,7 @@ Router API(`liner-gpt-router`)의 `routing_strategy`를 작업 성격에 맞게 
 magentify-mini/
 ├── api/
 │   ├── _llm.ts            # LLM 서버 로직 (공급자 선택, 재시도, 타임아웃, 일일 한도)
+│   ├── _guard.ts          # 공개 API 보호 (같은 출처만, IP별 횟수 제한, 작업·프롬프트 시그니처·길이 검사)
 │   ├── _news.ts           # 업종 동향 검색 (Liner Search API, 결과 필터링)
 │   └── llm/
 │       ├── generate.ts    # Vercel 함수: POST /api/llm/generate
@@ -115,7 +116,10 @@ npm run dev                 # http://localhost:3000
 | `LINER_DAILY_LIMIT` | 200 | 하루 live 호출 상한(Model API와 Search API 합산). 넘으면 폴백 |
 | `LINER_SEARCH_TIMEOUT_SEC` | 20 | 업종 동향 검색 제한 시간 |
 | `GEMINI_API_KEY` | (없음) | Liner 키가 없을 때만 쓰는 대체 공급자 |
-| `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH` | | 이전 버전(Streamlit) 호환용 이름. 현재 화면 설정에서 변경한다 |
+| `GUARD_GENERATE_PER_10MIN` | 40 | 생성 API의 IP당 10분 호출 상한 |
+| `GUARD_NEWS_PER_10MIN` | 20 | 업종 동향 검색 API의 IP당 10분 호출 상한 |
+
+기준일과 데모 모드는 환경변수가 아니라 설정 화면에서 바꾼다(이전 Streamlit 계획의 `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH`는 더 이상 쓰지 않는다).
 
 ## 6. 5분 시연 시나리오
 
@@ -146,7 +150,7 @@ npm run cache:generate -- --force   # 전체 다시 생성
 ## 7. 테스트
 
 ```bash
-npm test            # vitest 135개
+npm test            # vitest 155개
 npm run lint        # tsc --noEmit
 npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 ```
@@ -171,6 +175,7 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 ## 9. 보안과 개인정보
 
 - API 키는 서버 환경변수에만 있고 브라우저와 응답 본문에는 전달되지 않는다. `.env`는 `.gitignore`로 제외된다.
+- **공개 API 보호(`api/_guard.ts`)**: 로그인이 없는 데모라 배포 URL을 아는 누구나 Liner 크레딧을 쓰지 못하게 다섯 가지를 막는다. (1) 같은 출처(Origin)의 브라우저 요청만 허용, (2) IP별 10분 횟수 제한, (3) 앱이 쓰는 5가지 작업(브리핑, 이메일, 통화, 질문, 후속 조치)만 허용, (4) 작업별 시스템 프롬프트 시그니처가 맞지 않으면 거절, (5) 프롬프트 길이 제한. 한계: Origin 헤더는 curl 등으로 위조할 수 있고, 서버리스 인스턴스가 여러 개면 횟수 제한도 인스턴스별이다. 로그인 없는 데모의 최소 방어이며 완전한 인증을 대신하지 않는다.
 - API에는 실제 거래처명, 담당자명, 연락처를 보내지 않는다. 별칭(C01…)과 요약 수치만 보낸다.
 - 질문하기는 질문 속 거래처명을 별칭으로 바꿔서 보내므로, 실명으로 묻더라도 Liner에는 별칭만 전달된다.
 - 접촉 메모는 외부로 보내기 전에 거래처명과 담당자명을 `[이름]`으로 가리고 500자로 제한한다. 그 외 연락처·실명은 사용자가 메모에 쓰지 않도록 화면에 안내한다.
@@ -186,7 +191,7 @@ npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 | 구분 | 내용 |
 | :--- | :--- |
 | 기존(프로토타입) | 화면 5개, 분석 로직(`src/analysis.ts`), localStorage 저장, 데모 데이터, 기획서·PRD 문서 |
-| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, 작업별 Router 전략(`routing_strategy`)과 실제 응답 모델 표시, 설정 화면의 Liner API 호출 현황 패널, **업종 동향 + 출처 칩(Liner Search API)**, **질문하기**, **접촉 메모 후속 조치 제안**, vitest 135개, 키 검사 스크립트, 응답 저장본 57건과 업종 동향 저장본, 이 README |
+| 신규(2026-11-13~) | LLM 서버 로직 분리(`api/_llm.ts`)와 Vercel 함수, Liner 우선 호출과 주소 보정, 재시도·타임아웃·일일 한도, 응답 검증 강화(입력 외 숫자), 폴백·저장본 라벨의 사실 표시, API 호출 로그, 응답 저장본 로더와 생성 스크립트, 작업별 Router 전략(`routing_strategy`)과 실제 응답 모델 표시, 설정 화면의 Liner API 호출 현황 패널, **업종 동향 + 출처 칩(Liner Search API)**, **질문하기**, **접촉 메모 후속 조치 제안**, **공개 API 보호**, 금지어 "확정" 부정 표현 허용(불필요한 재요청 감소), vitest 155개, 키 검사 스크립트, 응답 저장본 57건과 업종 동향 저장본, 이 README |
 
 ## 11. 확인된 사실 (2026-11-13 기준)
 
@@ -213,7 +218,7 @@ PRD v1.1은 Streamlit/Python 기준으로 쓰였다. 구현은 아래처럼 바�
 | 응답 캐시 | `data/cache/*.json` | `public/cache/llm-cache.json`(저장소 포함) + 브라우저 localStorage |
 | 배포 | 제외 | Vercel(서버리스 함수로 LLM 호출) |
 | LLM 호출 | openai SDK, base_url 교체 | 서버에서 fetch로 OpenAI 호환 `chat/completions` 호출. 브라우저에는 키 비노출 |
-| 환경변수 | `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH` | 현재 사용하지 않음(설정 화면에서 변경). `LINER_*`, `GEMINI_API_KEY`만 사용 |
+| 환경변수 | `DEMO_MODE`, `REF_DATE_DEFAULT`, `DB_PATH` | 현재 사용하지 않음(설정 화면에서 변경). `LINER_*`, `GEMINI_API_KEY`, `GUARD_*`만 사용 |
 | 테스트 | `test_golden.py`, `test_llm_validate.py` | `tests/*.test.ts` (golden, llm, server_llm, vercel_handlers) |
 | 추가된 검증 | 금지어, 입력 외 숫자 | + 브리핑의 영어 필드명 노출 금지, headline/caution의 별칭 노출 금지 |
 | 우선 확인 순서 | 대성정밀, 우리테크, 동양프레스, 세진금속 | 동일(골든 테스트로 고정) |

@@ -160,7 +160,7 @@ describe('Vercel 함수 /api/llm/news', () => {
     delete process.env.LINER_API_KEY;
     try {
       const o = mockRes();
-      await newsHandler({ method: 'POST', body: { query: '동향' } }, o);
+      await newsHandler({ method: 'POST', headers: { origin: 'https://app.test', host: 'app.test' }, body: { query: '동향' } }, o);
       expect(o.statusCode).toBe(503);
       expect(o.body.code).toBe('no_key');
     } finally {
