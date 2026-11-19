@@ -151,7 +151,7 @@ npm run cache:generate -- --force   # 전체 다시 생성
 ## 7. 테스트
 
 ```bash
-npm test            # vitest 175개
+npm test            # vitest 176개
 npm run lint        # tsc --noEmit
 npm run check:secrets   # 키 문자열 검사 (결과 0건이어야 함)
 ```

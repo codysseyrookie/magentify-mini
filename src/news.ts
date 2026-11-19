@@ -100,19 +100,28 @@ export async function fetchNews(
       const err = await res.json().catch(() => ({}));
       const code = err.code || `http_${res.status}`;
       logApiCall({ task: 'news', ok: false, error_code: code, latency_ms: latency, ...meta, provider: code === 'no_key' ? null : 'liner' });
-      return { items: [], source: 'none', latency_ms: null, error_code: code, query };
+      return (await cachedAfterLiveMiss(query, code)) ?? { items: [], source: 'none', latency_ms: null, error_code: code, query };
     }
     const data = await res.json();
     const items: NewsItem[] = Array.isArray(data.items) ? data.items : [];
     if (items.length === 0) {
       logApiCall({ task: 'news', ok: false, error_code: 'empty', latency_ms: latency, ...meta });
-      return { items: [], source: 'none', latency_ms: latency, error_code: 'empty', query };
+      return (await cachedAfterLiveMiss(query, 'empty')) ?? { items: [], source: 'none', latency_ms: latency, error_code: 'empty', query };
     }
     logApiCall({ task: 'news', ok: true, error_code: null, latency_ms: latency, ...meta });
     setLocal(query, items);
     return { items, source: 'live', latency_ms: latency, error_code: null, query };
   } catch {
     logApiCall({ task: 'news', ok: false, error_code: 'network', latency_ms: Math.round(performance.now() - started), ...meta, provider: null });
-    return { items: [], source: 'none', latency_ms: null, error_code: 'network', query };
+    return (await cachedAfterLiveMiss(query, 'network')) ?? { items: [], source: 'none', latency_ms: null, error_code: 'network', query };
   }
+}
+
+/**
+ * 실시간 검색이 실패하거나 0건이면, 같은 검색어의 저장본(이 브라우저 또는 배포 저장본)을 쓴다.
+ * 이때 라벨은 반드시 저장본(cache)이고, 실패 사유는 error_code에 남긴다(실시간으로 위장하지 않는다).
+ */
+async function cachedAfterLiveMiss(query: string, code: string): Promise<NewsResult | null> {
+  const cached = getLocal(query) ?? (await getBundled(query));
+  return cached && cached.length ? { items: cached, source: 'cache', latency_ms: null, error_code: code, query } : null;
 }

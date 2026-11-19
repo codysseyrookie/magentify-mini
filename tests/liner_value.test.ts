@@ -153,6 +153,19 @@ describe('업종 검색어(B): Liner가 품목에서 검색어를 만든다', ()
     expect(r.query).toBe('정밀가공 업계 동향 뉴스');
   });
 
+  it('실시간 검색이 0건이면 저장본 기사를 저장본 라벨로 쓴다(실시간으로 위장하지 않음)', async () => {
+    const d: NewsItem = { url: 'https://n.kr/d', title: '기본 검색 기사 제목입니다', hostname: 'n.kr', date: '2026-11-10', description: '' };
+    __setBundledNewsForTest({ [DEFAULT_NEWS_QUERY]: { items: [d] } });
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (url.includes('/api/llm/generate')) return respond({ text: JSON.stringify({ query: '금형 업계 동향 뉴스' }), provider: 'liner' });
+      return respond({ items: [] });
+    }));
+    const r = await fetchIndustryNews('정밀 금형 부품', { demoMode: true, forceLive: true }, '대성정밀');
+    expect(r.items).toEqual([d]);
+    expect(r.source).toBe('cache');
+    expect(r.queryHits).toBe(0);
+  });
+
   it('데모 모드는 저장본 검색어를 먼저 쓴다', async () => {
     __setBundledCacheForTest({ [newsQueryCacheKey('정밀 금형 부품')]: { query: '금형 업계 동향 뉴스' } });
     const f = vi.fn();
