@@ -9,7 +9,7 @@
  */
 
 export type GuardKind = 'generate' | 'news';
-export type TaskName = 'briefing' | 'email' | 'call' | 'qa' | 'followup';
+export type TaskName = 'briefing' | 'email' | 'call' | 'qa' | 'followup' | 'news_query';
 
 type Env = Record<string, string | undefined>;
 export interface GuardResult {
@@ -32,6 +32,7 @@ export const TASKS: Record<TaskName, { startsWith: string; includes: string; use
   email: { startsWith: '너는 소규모 제조사 대표를 대필하는 업무 이메일 작성 비서다.', includes: '이메일', userMax: 3500 },
   call: { startsWith: '너는 소규모 제조사 대표를 위한 전화 통화 가이드 작성 비서다.', includes: '통화', userMax: 1500 },
   followup: { startsWith: '너는 접촉 메모에서 후속 조치를 뽑아 주는 비서다.', includes: '후속 조치', userMax: 3000 },
+  news_query: { startsWith: '너는 업종 동향 검색어를 만드는 비서다.', includes: '검색어', userMax: 200 },
 };
 
 function header(h: GuardRequest['headers'], name: string): string {

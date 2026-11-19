@@ -51,6 +51,8 @@ export interface Assessment {
   project_based: boolean;
   priority_score: number;
   intervals: number[];
+  /** 가장 자주 주문한 품목(품목 열이 없으면 null). 문안 개인화와 업종 검색어 생성에 쓴다. */
+  main_item: string | null;
   avg_amount: number | null;
   reasons: string[];
   questions: string[];
@@ -155,7 +157,7 @@ export interface FollowupContent {
 
 export interface ApiLogRecord {
   id: number;
-  task: 'briefing' | 'email' | 'call' | 'news' | 'qa' | 'followup';
+  task: 'briefing' | 'email' | 'call' | 'news' | 'news_query' | 'qa' | 'followup';
   provider: 'liner' | 'gemini' | null;
   ok: boolean;
   error_code: string | null;
@@ -179,6 +181,10 @@ export interface DraftRecord {
   /** 이 초안을 만들 때 참고한 업종 동향 기사(제목만 전달됨). 없으면 동향 없이 작성한 초안 */
   news?: NewsItem[] | null;
   news_source?: 'live' | 'cache' | null;
+  /** Liner가 품목에서 만든 업종 검색어(자동 검색일 때만) */
+  news_query?: string | null;
+  /** 그 검색어로 찾은 기사 수(0이면 기본 검색어 기사로만 채움) */
+  news_query_hits?: number | null;
   edited_text: string;
   ref_date: string;
   created_at: string;

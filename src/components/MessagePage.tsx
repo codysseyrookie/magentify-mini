@@ -555,11 +555,16 @@ export function MessagePage({
                         maxLength={60}
                         onChange={(e) => onNewsQueryChange(e.target.value)}
                         aria-label="업종 동향 검색어"
+                        placeholder={
+                          currentAssessment?.main_item
+                            ? `비워 두면 Liner가 품목 '${currentAssessment.main_item}'에서 검색어를 만들어요`
+                            : '비워 두면 기본 검색어(제조업 수주 동향)로 찾아요'
+                        }
                         className="w-full h-[40px] rounded-full px-4 text-[14px]"
                         style={{ backgroundColor: 'var(--ztd-lift)', border: '1px solid var(--ztd-line)', color: 'var(--ztd-ink)' }}
                       />
                       <p className="text-[12px] mt-1.5" style={{ color: 'var(--ztd-muted)' }}>
-                        검색어만 외부(Liner)로 전송돼요. 거래처명이나 개인정보는 넣지 마세요.
+                        품목명과 검색어만 외부(Liner)로 전송돼요. 거래처명이나 개인정보는 넣지 마세요.
                       </p>
                     </div>
                   )}
@@ -578,6 +583,17 @@ export function MessagePage({
                         />
                         <span className="text-[12px]" style={{ color: 'var(--ztd-muted)' }}>제목만 참고했고, 내용은 사실 확인 전이에요</span>
                       </div>
+                      {currentEmailDraft.news_query && (
+                        <p className="text-[12px]" style={{ color: 'var(--ztd-muted)' }} data-testid="news-query-note">
+                          검색어: <span className="font-semibold" style={{ color: 'var(--ztd-ink)' }}>{currentEmailDraft.news_query}</span>
+                          {currentAssessment?.main_item ? ` (Liner가 품목 '${currentAssessment.main_item}'에서 만듦)` : ' (Liner가 만듦)'}
+                          {currentEmailDraft.news_query_hits === 0
+                            ? ' · 이 검색어로 찾은 기사가 없어 기본 검색어 기사로 채웠어요'
+                            : typeof currentEmailDraft.news_query_hits === 'number'
+                            ? ` · 업종 기사 ${currentEmailDraft.news_query_hits}건 + 기본 검색어 기사`
+                            : ' + 기본 검색어'}
+                        </p>
+                      )}
                       <div className="flex flex-col gap-1.5">
                         {currentEmailDraft.news.map((n) => (
                           <a
@@ -612,7 +628,9 @@ export function MessagePage({
                         </span>
                       </div>
                       <span className="text-[13px]" style={{ color: 'var(--ztd-muted)' }}>
-                        가격·납기·할인 약속 없음
+                        {currentEmailDraft.source !== 'fallback' && currentAssessment?.main_item
+                          ? `품목·주문 흐름 반영 · 가격·납기·할인 약속 없음`
+                          : '가격·납기·할인 약속 없음'}
                       </span>
                     </div>
 

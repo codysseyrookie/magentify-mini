@@ -59,6 +59,9 @@ function validDate(s: unknown): s is string {
   return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
+/** 기사가 아닌 제목(주가·티커·종목 추천, 서적·PDF 판매) */
+export const JUNK_TITLE = /주가|티커|종목|골든\s*크로스|매수|매도|공시|서적|\bPDF\b|무역투자24/i;
+
 /** 검색 결과를 걸러 출처 칩에 쓸 항목만 남긴다. (순수 함수) */
 export function filterNews(results: any[], max = NEWS_MAX_ITEMS): NewsItem[] {
   const out: NewsItem[] = [];
@@ -68,6 +71,7 @@ export function filterNews(results: any[], max = NEWS_MAX_ITEMS): NewsItem[] {
     const title = typeof r?.title === 'string' ? r.title.replace(/\s+/g, ' ').trim() : '';
     const url = typeof r?.url === 'string' ? r.url.trim() : '';
     if (title.length < 10 || /목\s*차|기사\s*목록/.test(title)) continue;
+    if (JUNK_TITLE.test(title)) continue; // 주가·종목 페이지, 보고서 판매 페이지는 연락 계기로 쓸 수 없다
     if (!/^https?:\/\//i.test(url)) continue;
     let host = typeof r?.hostname === 'string' ? r.hostname.trim() : '';
     if (!host) {

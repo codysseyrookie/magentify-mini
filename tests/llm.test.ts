@@ -4,6 +4,7 @@ import { DEMO_CSV_DATA, parseCSV } from '../src/demoData';
 import {
   __setBundledCacheForTest,
   buildAllowedNumbers,
+  emailCacheKey,
   fallbackEmail,
   generateBriefing,
   generateCallGuide,
@@ -192,7 +193,7 @@ describe('LLM 호출 계층: 폴백·재요청·캐시 (PRD F12)', () => {
 
   it('데모 모드에서 저장소 캐시 파일에 항목이 있으면 호출 없이 cache를 돌려준다', async () => {
     const a = daeseong();
-    const key = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_정중하게`;
+    const key = emailCacheKey(a, '정중하게');
     __setBundledCacheForTest({ [key]: JSON.parse(okEmailJson()) });
     const f = vi.fn();
     vi.stubGlobal('fetch', f);
@@ -203,7 +204,7 @@ describe('LLM 호출 계층: 폴백·재요청·캐시 (PRD F12)', () => {
 
   it('"새로 생성"(forceLive)은 캐시를 무시하고 live 호출을 시도한다', async () => {
     const a = daeseong();
-    const key = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_정중하게`;
+    const key = emailCacheKey(a, '정중하게');
     __setBundledCacheForTest({ [key]: JSON.parse(okEmailJson()) });
     const f = mockFetchSequence([{ ok: true, json: { text: okEmailJson(), provider: 'liner' } }]);
     const r = await generateEmail(a, { demoMode: true, forceLive: true });
@@ -262,7 +263,7 @@ describe('브리핑 문장 품질 검증', () => {
 
 describe('작업별 Router 전략 (STRATEGY_BY_TASK)', () => {
   it('브리핑·후속 조치 추출은 비용 우선, 이메일·통화 가이드는 품질 우선, 질문 답변은 균형으로 정해져 있다', () => {
-    expect(STRATEGY_BY_TASK).toEqual({ briefing: 'cost', email: 'quality', call: 'quality', qa: 'balanced', followup: 'cost' });
+    expect(STRATEGY_BY_TASK).toEqual({ briefing: 'cost', email: 'quality', call: 'quality', qa: 'balanced', followup: 'cost', news_query: 'cost' });
   });
 
   it('이메일 호출은 quality를 서버에 보내고, 응답 모델과 토큰을 결과에 담는다', async () => {

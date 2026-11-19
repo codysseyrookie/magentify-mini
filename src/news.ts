@@ -66,7 +66,8 @@ async function getBundled(query: string): Promise<NewsItem[] | null> {
     }
   }
   const items = bundledNews?.[query]?.items;
-  return Array.isArray(items) && items.length ? items : null;
+  // 저장본에 "결과 0건"으로 기록된 검색어는 []를 돌려준다(데모 모드에서 괜히 다시 호출하지 않도록).
+  return Array.isArray(items) ? items : null;
 }
 
 /**
@@ -82,7 +83,8 @@ export async function fetchNews(
 
   if (options.demoMode && !options.forceLive) {
     const cached = getLocal(query) ?? (await getBundled(query));
-    if (cached) return { items: cached, source: 'cache', latency_ms: null, error_code: null, query };
+    if (cached && cached.length) return { items: cached, source: 'cache', latency_ms: null, error_code: null, query };
+    if (cached) return { items: [], source: 'none', latency_ms: null, error_code: 'empty', query };
   }
 
   const started = performance.now();

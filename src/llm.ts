@@ -9,7 +9,13 @@ import {
 import { logApiCall } from './storage';
 import type { FollowupContent, NewsItem, QaContent, RoutingStrategy, TokenUsage } from './types';
 import { shortHash } from './hash';
-import { newsFingerprint } from './news';
+import { DEFAULT_NEWS_QUERY, newsFingerprint } from './news';
+
+/** 업종 검색어에 넣지 않는 증권 용어(주가·종목 기사가 걸리지 않도록) */
+export const NEWS_QUERY_BLOCKED = /주가|종목|투자|매수|매도|증시|코스피|코스닥/;
+
+/** 문안 프롬프트 버전. 프롬프트 입력이 바뀌면 올려 예전 저장본이 쓰이지 않게 한다. */
+export const MESSAGE_PROMPT_VERSION = 'p2';
 
 export const FORBIDDEN_WORDS = [
   '확정',
@@ -76,7 +82,7 @@ function collectStrings(value: any, acc: string[] = []): string[] {
   return acc;
 }
 
-export type TaskName = 'briefing' | 'email' | 'call' | 'qa' | 'followup';
+export type TaskName = 'briefing' | 'email' | 'call' | 'qa' | 'followup' | 'news_query';
 
 const OUTCOME_VALUES = ['planned', 'contacted', 'waiting_reply', 'quote_requested', 'reorder_confirmed', 'on_hold', 'not_needed'];
 
@@ -139,6 +145,16 @@ export function validate(
       violations.push("질문 답변 필수 키 'referenced' 누락");
     } else if (allowedIds && content.referenced.some((id: any) => !allowedIds.has(id))) {
       violations.push('입력에 없는 거래처 id를 인용했습니다.');
+    }
+  } else if (task === 'news_query') {
+    const q = typeof content.query === 'string' ? content.query.trim() : '';
+    if (!q) violations.push("검색어 필수 키 'query' 누락");
+    else {
+      if (q.length < 6 || q.length > 30) violations.push('검색어는 6자 이상 30자 이하여야 합니다.');
+      if (!/[가-힣]/.test(q)) violations.push('검색어에 한국어가 없습니다.');
+      if (/\d/.test(q)) violations.push('검색어에 숫자를 넣지 않습니다.');
+      if (NEWS_QUERY_BLOCKED.test(q)) violations.push('검색어에 증권 용어를 넣지 않습니다.');
+      if (/https?:|www\./i.test(q)) violations.push('검색어에 링크를 넣지 않습니다.');
     }
   } else if (task === 'followup') {
     for (const k of ['outcome', 'channel', 'next_contact_date', 'reason']) {
@@ -411,6 +427,7 @@ export const STRATEGY_BY_TASK: Record<TaskName, RoutingStrategy> = {
   call: 'quality',
   qa: 'balanced', // 질문 답변은 속도와 정확도의 균형
   followup: 'cost', // 메모에서 값을 뽑는 추출 작업
+  news_query: 'cost', // 품목에서 업종 검색어 하나를 만드는 짧은 작업
 };
 
 /**
@@ -490,7 +507,7 @@ export function briefingCacheKey(top: Assessment[]): string {
 }
 
 export function emailCacheKey(a: Assessment, tone: MessageTone = '정중하게', news: NewsItem[] = []): string {
-  const base = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+  const base = `email_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}_${MESSAGE_PROMPT_VERSION}`;
   return news.length > 0 ? `${base}_news-${newsFingerprint(news)}` : base;
 }
 
@@ -509,10 +526,40 @@ export const NEWS_SYSTEM_RULES = `
 - 거래처의 사정을 추측하지 않는다.`;
 
 export function callCacheKey(a: Assessment, tone: MessageTone = '정중하게'): string {
-  return `call_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}`;
+  return `call_${a.customer_key}_${a.gap_days}_${a.ratio}_${tone}_${MESSAGE_PROMPT_VERSION}`;
 }
 
 const NUMBER_RULE = '숫자는 입력에 있는 값만 인용한다(새로운 숫자·기간·금액을 만들지 않는다).';
+
+/** 코드가 판단한 주문 흐름(간격이 일정했는지). 간격이 3개 미만이면 null. */
+export function orderFlowText(a: Assessment): string | null {
+  const iv = a.intervals;
+  if (!a.median_interval || iv.length < 3) return null;
+  const spread = Math.max(...iv) - Math.min(...iv);
+  return spread <= a.median_interval * 0.3 ? '평소에는 주문 간격이 일정했음' : '평소에도 주문 간격이 고르지 않았음';
+}
+
+/**
+ * 문안 개인화용 거래처 맥락: 주요 품목, 최근 주문 간격, 주문 흐름.
+ * 거래처명·금액·원본 거래 내역은 넣지 않는다(품목명에 거래처명이 있으면 가린다).
+ */
+export function customerContext(a: Assessment): string {
+  const parts: string[] = [];
+  if (a.main_item) parts.push(`주요 품목: ${maskMemo(a.main_item, [a.display_name]).slice(0, 30)}`);
+  const recent = a.intervals.slice(-6);
+  if (recent.length >= 2) parts.push(`최근 주문 간격(일): ${recent.join(', ')}`);
+  const flow = orderFlowText(a);
+  if (flow) parts.push(`주문 흐름: ${flow}`);
+  return parts.join(', ');
+}
+
+/** 고객에게 나가는 이메일 제목·본문에 공백·주기 같은 관리 숫자를 쓰지 않았는지 검사한다. */
+export function emailExposureViolations(parsed: any): string[] {
+  const text = `${parsed?.subject ?? ''}\n${parsed?.body ?? ''}`;
+  return /\d+(\.\d+)?\s*(일|배|개월|주)/.test(text) || /\d{4}-\d{2}-\d{2}/.test(text)
+    ? ['이메일 제목·본문에 거래 공백이나 주문 간격 같은 숫자를 썼습니다.']
+    : [];
+}
 
 export async function generateBriefing(
   top: Assessment[],
@@ -572,10 +619,13 @@ export async function generateEmail(
 2. 이탈, 거래 중단, 손실 등 부담을 주는 단어를 쓰지 않는다.
 3. 구매나 발주를 압박하지 말고 안부와 일정 확인 위주로 부드럽게 문의한다.
 4. ${NUMBER_RULE}
-5. 순수 JSON으로만 응답하라:
+5. 주요 품목이 있으면 본문과 check_questions에 그 품목 이름을 넣어 구체적으로 묻는다(예: 다음 생산 계획, 사양이나 도면 변경, 필요한 시점). 품목의 가격, 재고, 납기는 말하지 않는다.
+6. 공백 일수, 배수, 주문 간격, 최근 거래일 같은 숫자나 날짜는 제목과 본문에 쓰지 않는다. 상대가 관리받는 느낌을 받지 않도록, 이 정보는 어조와 질문을 고르는 데만 쓴다.
+7. 순수 JSON으로만 응답하라:
 {"subject": "이메일 제목", "body": "이메일 본문", "check_questions": ["질문1", "질문2"]}`;
 
-  const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소간격 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
+  const ctx = customerContext(a);
+  const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소간격 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}${ctx ? `\n거래 맥락: ${ctx}` : ''}`;
 
   return runTask<EmailDraftContent>({
     task: 'email',
@@ -585,6 +635,7 @@ export async function generateEmail(
     userPrompt: userPrompt + newsPromptBlock(news),
     // 기사 제목에 있는 숫자는 인용 허용 범위에 넣지 않는다.
     allowedNumbersText: userPrompt,
+    extraValidate: emailExposureViolations,
     options,
   });
 }
@@ -603,15 +654,53 @@ export async function generateCallGuide(
 1. 가격, 납기, 할인, 특가를 약속하지 않는다.
 2. 이탈이나 거래 중단을 추궁하지 않는다.
 3. ${NUMBER_RULE}
-4. 순수 JSON으로만 응답하라:
+4. 주요 품목이 있으면 questions 중 1개 이상에 그 품목 이름을 넣어 구체적으로 묻는다(예: 다음 생산 계획, 사양 변경, 필요한 시점). 품목의 가격, 재고, 납기는 말하지 않는다.
+5. opening과 questions에는 공백 일수나 배수 같은 숫자를 말하지 않는다(purpose는 대표용 메모라 써도 된다).
+6. 순수 JSON으로만 응답하라:
 {"purpose": "통화 목적", "opening": "첫 인사", "questions": ["질문1", "질문2"], "next_step": "다음 단계", "after_call": ["기록1", "기록2"]}`;
 
-  const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소주기 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}`;
+  const ctx = customerContext(a);
+  const userPrompt = `거래처 정보: 최근거래 ${a.last_date}, 공백 ${a.gap_days}일, 평소주기 ${a.median_interval}일, 배수 ${a.ratio}배, VIP: ${a.vip}, 톤: ${tone}${ctx ? `\n거래 맥락: ${ctx}` : ''}`;
 
   return runTask<CallGuideContent>({
     task: 'call',
     cacheKey,
     fallbackContent: fallbackCall(a, tone),
+    systemPrompt,
+    userPrompt,
+    extraValidate: (p: any) => {
+      const said = [p?.opening, ...(Array.isArray(p?.questions) ? p.questions : [])].filter(s => typeof s === 'string').join('\n');
+      return /\d+(\.\d+)?\s*(일|배)/.test(said) ? ['통화 첫 인사·질문에 공백이나 배수 숫자를 썼습니다.'] : [];
+    },
+    options,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 업종 검색어: 품목 이름만 보고 업종 수준 검색어를 만든다(거래처명은 보내지 않는다).
+// 품목명을 그대로 검색하면 기사가 거의 없어서(실측), 넓은 업종 표현으로 바꾼다.
+// ---------------------------------------------------------------------------
+export function newsQueryCacheKey(item: string): string {
+  return `newsq_${shortHash(item.trim())}`;
+}
+
+export async function generateNewsQuery(
+  item: string,
+  options: { demoMode: boolean; forceLive?: boolean; strategy?: RoutingStrategy }
+): Promise<LlmResult<{ query: string }>> {
+  const systemPrompt = `너는 업종 동향 검색어를 만드는 비서다.
+거래처가 주문하는 품목 이름을 보고, 그 품목이 속한 업종의 최근 동향 기사를 찾기 좋은 한국어 검색어를 하나 만든다.
+규칙:
+1. 품목 이름을 그대로 쓰지 말고 업종 수준의 넓은 말로 바꾼다. 예: '정밀 금형 부품' -> '금형 업계 동향 뉴스', '센서 하우징' -> '센서 부품 업계 동향 뉴스'
+2. 회사명, 사람 이름, 지역명, 숫자를 넣지 않는다.
+3. 주가, 종목, 투자, 매수 같은 증권 용어를 넣지 않는다.
+4. 6자 이상 30자 이하로 쓰고 '동향 뉴스'로 끝낸다.
+5. 순수 JSON으로만 응답하라: {"query": "검색어"}`;
+  const userPrompt = `품목: ${item.replace(/\s+/g, ' ').trim().slice(0, 40)}`;
+  return runTask<{ query: string }>({
+    task: 'news_query',
+    cacheKey: newsQueryCacheKey(item),
+    fallbackContent: { query: DEFAULT_NEWS_QUERY },
     systemPrompt,
     userPrompt,
     options,

@@ -386,6 +386,23 @@ export function analyze(
 
     const medianInterval = intervals.length >= 1 ? calculateMedian(intervals) : null;
 
+    // 가장 자주 주문한 품목(동률이면 최근 품목). 품목 열이 없으면 null.
+    const itemCount = new Map<string, { n: number; last: string }>();
+    for (const t of txns) {
+      const it = (t.item || '').trim();
+      if (!it) continue;
+      const cur = itemCount.get(it);
+      itemCount.set(it, { n: (cur?.n ?? 0) + 1, last: t.date });
+    }
+    let mainItem: string | null = null;
+    let best = { n: 0, last: '' };
+    for (const [it, v] of itemCount) {
+      if (v.n > best.n || (v.n === best.n && v.last > best.last)) {
+        mainItem = it;
+        best = v;
+      }
+    }
+
     const totalAmt = txns.reduce((acc, t) => acc + t.amount, 0);
     const avgAmount = txns.length > 0 ? Math.round(totalAmt / txns.length) : null;
 
@@ -498,6 +515,7 @@ export function analyze(
       project_based: isProject,
       priority_score: priorityScore,
       intervals,
+      main_item: mainItem,
       avg_amount: avgAmount,
       reasons,
       questions,

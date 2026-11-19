@@ -16,6 +16,7 @@ import { generate, getStatus } from '../api/_llm.ts';
 import { searchNews } from '../api/_news.ts';
 import { DEFAULT_NEWS_QUERY, fetchNews } from '../src/news.ts';
 import type { NewsItem } from '../src/types.ts';
+import { composeIndustryNews } from '../src/industryNews.ts';
 import { analyze, buildClean, prioritize, suggestMapping, summarize } from '../src/analysis.ts';
 import { DEMO_CSV_DATA, parseCSV } from '../src/demoData.ts';
 import {
@@ -29,6 +30,8 @@ import {
   generateCallGuide,
   generateEmail,
   generateFollowup,
+  generateNewsQuery,
+  newsQueryCacheKey,
   maskMemo,
   QA_PRESET_QUESTIONS,
   qaCacheKey,
@@ -66,7 +69,7 @@ globalThis.fetch = (async (url: any, init: any) => {
   }
   if (String(url).includes('/api/llm/generate')) {
     const body = JSON.parse(init.body);
-    const r = await generate(body.systemPrompt, body.userPrompt, process.env, realFetch as any);
+    const r = await generate(body.systemPrompt, body.userPrompt, process.env, realFetch as any, 1500, body.strategy);
     return { ok: r.status < 400, status: r.status, json: async () => r.body } as any;
   }
   throw new Error('unexpected fetch: ' + url);
@@ -141,9 +144,26 @@ if (!newsCache[DEFAULT_NEWS_QUERY] || force) {
 const demoNews = newsCache[DEFAULT_NEWS_QUERY]?.items ?? [];
 if (demoNews.length > 0) {
   for (const a of priority.slice(0, 4)) {
+    // 앱과 같은 순서: Liner가 품목에서 업종 검색어를 만들고(저장), 그 검색어로 기사를 찾아(저장, 0건도 기록)
+    // 기본 기사와 합친 목록으로 이메일 저장본을 만든다.
+    let primary: NewsItem[] = [];
+    if (a.main_item) {
+      await ensure(newsQueryCacheKey(a.main_item), () => generateNewsQuery(a.main_item!, liveOpts));
+      const q = cache[newsQueryCacheKey(a.main_item)]?.query as string | undefined;
+      if (q && q !== DEFAULT_NEWS_QUERY) {
+        if (!newsCache[q] || force) {
+          const nr = await fetchNews(q, { demoMode: false, forceLive: true });
+          newsCache[q] = { items: nr.items, fetched_at: new Date().toISOString().slice(0, 10) };
+          console.log(`저장: 업종 동향 ${nr.items.length}건 (${q})`);
+          nr.items.forEach(i => console.log(`  - ${i.date} ${i.hostname} ${i.title}`));
+        }
+        primary = newsCache[q].items;
+      }
+    }
+    const merged = composeIndustryNews(primary, demoNews, a.display_name).items;
     const tones: MessageTone[] = toneMode === 'all' ? ALL_TONES : ['정중하게'];
     for (const tone of tones) {
-      await ensure(emailCacheKey(a, tone, demoNews), () => generateEmail(a, { ...liveOpts, tone, news: demoNews }));
+      await ensure(emailCacheKey(a, tone, merged), () => generateEmail(a, { ...liveOpts, tone, news: merged }));
     }
   }
 }

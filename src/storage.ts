@@ -154,7 +154,7 @@ export function saveDraft(
   source: 'live' | 'cache' | 'fallback',
   content: any,
   refDate: string,
-  extra: { model?: string | null; news?: NewsItem[]; news_source?: 'live' | 'cache' | null } = {}
+  extra: { model?: string | null; news?: NewsItem[]; news_source?: 'live' | 'cache' | null; news_query?: string | null; news_query_hits?: number | null } = {}
 ): DraftRecord {
   const drafts = getDrafts();
   const nextId = drafts.length > 0 ? Math.max(...drafts.map(d => d.id)) + 1 : 1;
@@ -169,6 +169,8 @@ export function saveDraft(
     model: extra.model ?? null,
     news: extra.news && extra.news.length > 0 ? extra.news : null,
     news_source: extra.news && extra.news.length > 0 ? extra.news_source ?? null : null,
+    news_query: extra.news && extra.news.length > 0 ? extra.news_query ?? null : null,
+    news_query_hits: extra.news && extra.news.length > 0 && extra.news_query ? extra.news_query_hits ?? null : null,
     edited_text: kind === 'email' ? (content?.body || '') : '',
     ref_date: refDate,
     created_at: now,
