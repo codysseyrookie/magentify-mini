@@ -1,3 +1,4 @@
+import { gapTakeaway } from '../analysis';
 import React, { useMemo } from 'react';
 import { ChartCard, BarChart, DonutChart, formatCurrency } from 'ztd-charts';
 import { Assessment, BriefingContent, LlmResult, SummaryCounts, TouchpointRecord } from '../types';
@@ -311,11 +312,7 @@ export function OverviewPage({
             number="01"
             title="연락이 뜸해진 거래처 공백 비교"
             subtitle="우선 확인이 필요한 거래처의 최근 미접촉 기간"
-            takeaway={
-              gapChartData.length > 0
-                ? `${gapChartData[0].name}의 최근 공백이 ${gapChartData[0].gap_days}일로 가장 먼저 확인이 필요해요.`
-                : '모든 거래처가 평소 발주 주기 안에서 안정적으로 유지되고 있어요.'
-            }
+            takeaway={gapTakeaway(priorityList)}
             accent="공백"
             level="basic"
             replay

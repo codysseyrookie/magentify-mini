@@ -525,6 +525,32 @@ export function analyze(
   return assessments;
 }
 
+/** 이름 끝 글자에 받침이 있으면 '이에요', 없으면 '예요' */
+function ieyo(name: string): string {
+  const last = name.replace(/\(.*?\)\s*$/, '').trim().slice(-1);
+  const code = last.charCodeAt(0) - 0xac00;
+  if (code < 0 || code > 11171) return '이에요';
+  return code % 28 === 0 ? '예요' : '이에요';
+}
+
+/**
+ * 개요 그래프 아래 한 줄 요약.
+ * 순서는 공백 일수가 아니라 우선순위 점수(상태 점수 + VIP 1.5)로 정해지므로,
+ * 1순위와 공백이 가장 긴 거래처가 다르면 둘을 함께 밝힌다(그래프와 문구가 어긋나 보이지 않도록).
+ */
+export function gapTakeaway(priority: Assessment[]): string {
+  const list = priority.filter(a => a.status === 'high_risk' || a.status === 'risk' || a.status === 'attention').slice(0, 6);
+  if (list.length === 0) return '모든 거래처가 평소 발주 주기 안에서 안정적으로 유지되고 있어요.';
+  const first = list[0];
+  const longest = list.reduce((m, a) => (a.gap_days > m.gap_days ? a : m), first);
+  const ratio = (a: Assessment) => (a.ratio !== null ? `${a.ratio}배` : '-');
+  if (longest.customer_key === first.customer_key) {
+    return `${first.display_name}의 공백이 ${first.gap_days}일(평소 주기의 ${ratio(first)})로 가장 길어 먼저 확인이 필요해요.`;
+  }
+  const firstNote = first.vip ? `VIP, 평소 주기의 ${ratio(first)}` : `평소 주기의 ${ratio(first)}`;
+  return `우선 확인 1순위는 ${first.display_name}(${firstNote})${ieyo(first.display_name)}. 공백이 가장 긴 곳은 ${longest.display_name}(${longest.gap_days}일, ${ratio(longest)})${ieyo(longest.display_name)}.`;
+}
+
 export function prioritize(items: Assessment[]): Assessment[] {
   const targets = items.filter(a => a.status !== 'normal' && a.status !== 'hold');
   return [...targets].sort((a, b) => {
